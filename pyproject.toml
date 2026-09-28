@@ -1,0 +1,157 @@
+[project]
+name = "dference"
+# Derived from the git tag (v1.2.3) by hatch-vcs: releasing means tagging, there is
+# no version to bump in pyproject.toml or uv.lock. See .github/workflows/release.yml.
+dynamic = ["version"]
+description = "Compare two DataFrames by key and explore the differences in an interactive widget for marimo and Jupyter."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "ISC"
+license-files = ["LICENSE"]
+authors = [{ name = "Thomas Oberbichler", email = "thomas.oberbichler@gmail.com" }]
+keywords = ["dataframe", "diff", "compare", "polars", "pandas", "marimo", "jupyter", "anywidget", "data-quality"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Jupyter",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
+dependencies = [
+    "anywidget>=0.9.13",
+    "polars>=1.30",
+    "traitlets>=5.9",
+]
+
+[project.optional-dependencies]
+# pandas input needs pyarrow for a zero-copy conversion to polars
+pandas = ["pandas>=2.1", "pyarrow>=15"]
+
+[project.urls]
+Homepage = "https://github.com/oberbichler/dference"
+Repository = "https://github.com/oberbichler/dference"
+Issues = "https://github.com/oberbichler/dference/issues"
+Changelog = "https://github.com/oberbichler/dference/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    { include-group = "lint" },
+    { include-group = "test" },
+    { include-group = "e2e" },
+    "marimo>=0.14",
+    "numpy>=1.26",
+]
+# browser tests of the widget (tests/e2e); also needs `playwright install chromium`
+e2e = [{ include-group = "test" }, "playwright>=1.55"]
+lint = ["ruff>=0.12", "ty>=0.0.1a20"]
+test = [
+    "pytest>=8.3",
+    "pytest-cov>=6",
+    "pandas>=2.1",
+    "pyarrow>=15",
+    "hypothesis>=6.168.3",
+]
+
+[build-system]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.5"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+# without git metadata (e.g. a source archive from GitHub) there is no tag to read
+fallback-version = "0.0.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dference"]
+
+[tool.hatch.build.targets.sdist]
+# ship tests, examples and the changelog in the sdist (not in the wheel)
+include = ["src", "tests", "examples", "CHANGELOG.md", "README.md", "LICENSE"]
+
+# --------------------------------------------------------------------------- #
+# ruff
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "C4",       # comprehensions
+    "SIM",      # simplify
+    "RUF",      # ruff-specific
+    "D",        # pydocstyle
+    "N",        # pep8-naming
+    "PT",       # pytest style
+    "PERF",     # performance
+    "PL",       # pylint
+    "TC",       # type-checking imports
+    "PTH",      # pathlib
+    "RET",      # returns
+    "ISC",      # implicit string concat
+    "FBT",      # boolean traps
+    "ANN",      # annotations
+]
+ignore = [
+    "D105",     # magic methods need no docstring
+    "D107",     # __init__ documented on the class
+    "PLR0913",  # widget/compare mirror a wide public API
+    "ANN401",   # Any is intentional for "any frame-like object"
+    "ISC001",   # conflicts with the formatter
+    "FBT003",   # polars idioms: pl.lit(True), fill_null(False)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN", "PLR2004", "FBT", "PLC0415"]
+# browser tests assert on UI text, which uses typographic dashes ("1–10 of 44")
+"tests/e2e/**" = ["D", "ANN", "PLR2004", "FBT", "PLC0415", "RUF001"]
+# marimo notebooks: cells are functions with imports inside and explicit returns
+"examples/**" = ["D", "ANN", "B018", "N803", "PLR2004", "FBT", "E501", "PLC0415", "PLR1711", "PLR0917", "RUF001", "RUF003"]
+"benchmarks/**" = ["D", "ANN", "T201", "PLR2004"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# --------------------------------------------------------------------------- #
+# ty
+# --------------------------------------------------------------------------- #
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+# --------------------------------------------------------------------------- #
+# pytest / coverage
+# --------------------------------------------------------------------------- #
+[tool.pytest.ini_options]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+testpaths = ["tests"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["dference"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]

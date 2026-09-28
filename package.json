@@ -1,0 +1,17 @@
+{
+  "name": "dference-frontend",
+  "private": true,
+  "description": "Tooling for the dference widget frontend (formatting, linting, JSDoc type checks). Not published.",
+  "type": "module",
+  "scripts": {
+    "check": "biome check && tsc -p .",
+    "fix": "biome check --write",
+    "lint": "biome ci",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@anywidget/types": "0.4.0",
+    "@biomejs/biome": "2.5.14",
+    "typescript": "7.0.2"
+  }
+}

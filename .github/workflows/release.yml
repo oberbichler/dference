@@ -1,0 +1,159 @@
+name: Release
+
+# Run by hand with the version to release (Actions → Release → Run workflow).
+# The version comes from the git tag (hatch-vcs), so nothing is committed: the
+# workflow checks the version, runs the full CI on the commit, builds with that
+# version, publishes to PyPI and only then tags the commit and creates the
+# GitHub release – a release never announces a version that is not on PyPI.
+# If a later step fails, "Re-run failed jobs" continues where it stopped.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, without a leading "v" (e.g. 0.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Releases must never run concurrently: two runs could tag the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release from main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Run the release workflow on main, not ${GITHUB_REF_NAME}."
+          exit 1
+
+      - name: Validate version
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.post[0-9]+)?$'; then
+            echo "::error::'$VERSION' is not a valid release version. Expected e.g. 0.2.0 or 1.0.0rc1, without a leading 'v'."
+            exit 1
+          fi
+
+      # A version can never be replaced on PyPI, so refuse to reuse one. Each
+      # lookup must answer 404 explicitly: a network or auth error fails the run
+      # instead of passing the check.
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          check() { # $1: what, $2: URL that must not exist, $3...: extra curl args
+            status=$(curl -s -o /dev/null -w '%{http_code}' "${@:3}" "$2")
+            case "$status" in
+              404) echo "$1: none" ;;
+              200) echo "::error::$1 for $VERSION already exists."; exit 1 ;;
+              *) echo "::error::Could not check $1 for $VERSION (HTTP $status)."; exit 1 ;;
+            esac
+          }
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          auth=(-H "Authorization: Bearer $GH_TOKEN") # GitHub only, never sent to PyPI
+          check "Tag v$VERSION" "$api/git/ref/tags/v$VERSION" "${auth[@]}"
+          check "GitHub release v$VERSION" "$api/releases/tags/v$VERSION" "${auth[@]}"
+          check "PyPI release" "https://pypi.org/pypi/dference/$VERSION/json"
+
+  ci:
+    needs: check
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build distributions
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      # the exact commit the run was started on and the CI ran on
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.2.0 # no floating major tags since v7
+
+      # hatch-vcs honours this variable: build as the version being released
+      - name: Build
+        run: SETUPTOOLS_SCM_PRETEND_VERSION="$VERSION" uv build
+
+      - run: uvx twine check --strict dist/*
+
+      - name: Check the built version
+        run: |
+          ls dist
+          test -f "dist/dference-$VERSION-py3-none-any.whl"
+          test -f "dist/dference-$VERSION.tar.gz"
+          uv run --isolated --no-project --with "dist/dference-$VERSION-py3-none-any.whl" \
+            python -c 'import sys, dference; assert dference.__version__ == sys.argv[1], dference.__version__' "$VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/dference/${{ inputs.version }}/
+    permissions:
+      id-token: write # trusted publishing (no API token) and attestations
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Tag and GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and the release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      # Release notes: the "## [x.y.z]" section of CHANGELOG.md, if there is one.
+      - name: Release notes from CHANGELOG.md
+        id: notes
+        run: |
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[[^]]+\]: / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if grep -q '[^[:space:]]' notes.md; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No '## [$VERSION]' section in CHANGELOG.md; using generated release notes."
+          fi
+
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_NOTES: ${{ steps.notes.outputs.found }}
+        run: |
+          if [ "$HAS_NOTES" = true ]; then notes=(--notes-file notes.md); else notes=(--generate-notes); fi
+          gh release create "v$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            "${notes[@]}"

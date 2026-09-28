@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Frontend tooling
+node_modules/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# marimo
+__marimo__/
+.marimo/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

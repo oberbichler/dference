@@ -1,0 +1,952 @@
+/* dference – quiet table look like marimo.ui.table. Works in light & dark mode
+   because surfaces are translucent tints over whatever background surrounds it.
+   Colours: Okabe–Ito palette (colour-blind safe). Each side has one colour and one
+   chip (its short name); a row on one side only takes the colour of that side. */
+.dfd {
+  --dfd-line: rgba(127, 127, 127, 0.24);
+  --dfd-soft: rgba(127, 127, 127, 0.07);
+  --dfd-muted: rgba(127, 127, 127, 0.95);
+  /* every body row is as high as a difference (two values): the table height is
+     then header + rows per page × row height and does not jump when filtering */
+  --dfd-row-h: 48px;
+  --side-l: #0072b2; /* blue    – left  */
+  --side-r: #cc79a7; /* magenta – right */
+  --st-equal: #009e73; /* bluish green */
+  --st-mismatch: #e69f00; /* amber */
+  --st-missing_left: var(--side-r); /* row only in right */
+  --st-missing_right: var(--side-l); /* row only in left */
+  --dfd-danger: #d55e00; /* vermillion – errors, unrelated to the sides */
+  font-family: var(--marimo-text-font, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
+  font-size: 13px;
+  line-height: 1.4;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.dfd * {
+  box-sizing: border-box;
+}
+.dfd button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.dfd code {
+  font-family: var(--marimo-monospace-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+}
+.dfd :focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+.dfd-spacer {
+  flex: 1;
+}
+
+.dfd .st-equal {
+  --c: var(--st-equal);
+}
+.dfd .st-mismatch {
+  --c: var(--st-mismatch);
+}
+.dfd .st-missing_left {
+  --c: var(--st-missing_left);
+}
+.dfd .st-missing_right {
+  --c: var(--st-missing_right);
+}
+
+/* Status badge: coloured square + symbol, so status never relies on hue alone */
+.dfd-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--c);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.dfd-badge.st-mismatch {
+  color: #3b2800;
+}
+
+/* ---------- overview ---------- */
+.dfd-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* Both bars share one scale: no flex gap (it would shift the second bar);
+   segments are separated by an inset line drawn in the background colour. */
+.dfd-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dfd-dist {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.dfd-dist span {
+  background: var(--c);
+  transition: opacity 0.15s;
+}
+.dfd-dist span:not(:last-child) {
+  box-shadow: inset -2px 0 0 var(--dfd-bg, Canvas);
+}
+.dfd-dist span.off {
+  opacity: 0.18;
+}
+.dfd .g-found {
+  background: color-mix(in srgb, currentColor 55%, transparent);
+}
+.dfd .g-notfound {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, currentColor 55%, transparent) 0 2px,
+    color-mix(in srgb, currentColor 18%, transparent) 2px 4px
+  );
+}
+.dfd-swatch {
+  width: 20px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+}
+.dfd-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+.dfd-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 0.15s;
+}
+.dfd-stat.off {
+  opacity: 0.4;
+}
+.dfd-stat b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.dfd-stat small {
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+.dfd-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--dfd-muted);
+  font-size: 12px;
+}
+.dfd-meta b {
+  font-weight: 600;
+}
+.dfd-link {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  opacity: 0.8;
+}
+
+/* ---------- toolbar ---------- */
+.dfd-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.dfd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid var(--dfd-line);
+  background: transparent;
+}
+.dfd-btn:hover {
+  background: var(--dfd-soft);
+}
+.dfd-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--dfd-line);
+  border-radius: 6px;
+  height: 30px;
+  min-width: 200px;
+}
+.dfd-search svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0.6;
+}
+.dfd-search input {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  flex: 1;
+  min-width: 0;
+}
+.dfd-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.dfd-toolbar-dyn {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.dfd-pillfilter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--st-mismatch) 16%, transparent);
+  font-size: 12px;
+}
+.dfd-pillfilter.sel {
+  background: var(--dfd-soft);
+  border: 1px solid var(--dfd-line);
+}
+.dfd-pillfilter button {
+  border: 0;
+  background: none;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+/* ---------- status menu (popover of the status column) ---------- */
+.dfd-colmenu.status {
+  width: min(340px, 100%);
+}
+.dfd-presets {
+  display: flex;
+  gap: 4px;
+  padding: 2px 2px 6px;
+  border-bottom: 1px solid var(--dfd-line);
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.dfd-presets button {
+  border: 1px solid var(--dfd-line);
+  background: transparent;
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.dfd-presets button:hover {
+  background: var(--dfd-soft);
+}
+.dfd-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.dfd-opt:hover {
+  background: var(--dfd-soft);
+}
+.dfd-opt-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.dfd-opt-text small {
+  color: var(--dfd-muted);
+  font-size: 11px;
+}
+.dfd-opt b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.dfd-only {
+  border: 0;
+  background: none;
+  font-size: 11px;
+  padding: 2px 4px;
+  opacity: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dfd-opt:hover .dfd-only,
+.dfd-only:focus-visible {
+  opacity: 0.8;
+}
+@media (hover: none) {
+  .dfd-only {
+    opacity: 0.8;
+  }
+}
+
+/* ---------- table ---------- */
+.dfd-scroll {
+  overflow: auto;
+  border: 1px solid var(--dfd-line);
+  border-radius: 8px;
+}
+.dfd table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+.dfd-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  vertical-align: top;
+  background: var(--dfd-bg, Canvas);
+  background-image: linear-gradient(var(--dfd-soft), var(--dfd-soft));
+  border-bottom: 1px solid var(--dfd-line);
+  padding: 6px 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.dfd-sort {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-weight: 600;
+  display: inline-flex;
+  gap: 4px;
+}
+.dfd-arrow {
+  opacity: 0.7;
+  min-width: 0.6em;
+}
+.dfd-colmeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 400;
+}
+.dfd-dtype {
+  color: var(--dfd-muted);
+  font-family: var(--marimo-monospace-font, ui-monospace, monospace);
+}
+.dfd-tag {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--dfd-soft);
+  border: 1px solid var(--dfd-line);
+}
+.dfd-muted {
+  color: var(--dfd-muted);
+}
+.dfd-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dfd-delta.on {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* "=" reads as the quieter share next to "≠" until it is the active filter */
+.dfd-delta.eq {
+  color: var(--dfd-muted);
+  font-weight: 400;
+}
+.dfd-delta.eq:hover,
+.dfd-delta.eq.on {
+  color: inherit;
+}
+
+.dfd-scroll tbody td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--dfd-line);
+  white-space: nowrap;
+  /* a row with a difference is two lines high: single values sit in the middle */
+  vertical-align: middle;
+}
+/* a full page ends on the frame of the scroll box: no second line there */
+.dfd-scroll table.full tbody tr:last-child td {
+  border-bottom: 0;
+}
+.dfd-scroll tbody tr[data-id] {
+  height: var(--dfd-row-h);
+}
+.dfd-scroll tbody tr[data-id] {
+  cursor: pointer;
+}
+/* row identity: a status stripe on every row, a full tint on missing rows */
+.dfd-scroll tbody tr[data-id] td.cb {
+  box-shadow: inset 4px 0 0 var(--c);
+}
+.dfd-scroll tbody tr.st-missing_left td,
+.dfd-scroll tbody tr.st-missing_right td {
+  background-color: color-mix(in srgb, var(--c) 9%, transparent);
+}
+.dfd-scroll tbody tr[data-id]:hover td {
+  background-image: linear-gradient(var(--dfd-soft), var(--dfd-soft));
+}
+.dfd-scroll tbody tr[data-id].sel td {
+  background-image: linear-gradient(rgba(127, 127, 127, 0.12), rgba(127, 127, 127, 0.12));
+}
+.dfd-scroll tbody tr[data-id].active td {
+  background-image: linear-gradient(rgba(127, 127, 127, 0.2), rgba(127, 127, 127, 0.2));
+}
+.dfd td.cb,
+.dfd th.cb {
+  width: 34px;
+  padding-right: 0;
+}
+.dfd td.cb {
+  padding-left: 12px;
+}
+.dfd td.num,
+.dfd th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dfd th.num .dfd-colmeta {
+  justify-content: flex-end;
+}
+.dfd td.key {
+  font-weight: 600;
+}
+.dfd td.absent {
+  color: var(--dfd-muted);
+  opacity: 0.5;
+}
+/* 1px frame that neighbouring differences share: bottom = the cell border, top and
+   left sit on the neighbour's edge, right inside the cell – so adjacent frames overlap
+   instead of doubling or leaving the grey grid line between them */
+.dfd-scroll td.diff {
+  --dfd-frame: var(--st-mismatch);
+  background-color: color-mix(in srgb, var(--st-mismatch) 20%, transparent);
+  border-bottom-color: var(--dfd-frame);
+  box-shadow:
+    0 -1px 0 var(--dfd-frame),
+    -1px 0 0 var(--dfd-frame),
+    -1px -1px 0 var(--dfd-frame),
+    inset -1px 0 0 var(--dfd-frame);
+}
+/* first row: the sticky header covers the line above; last row of a full page: no
+   bottom border */
+.dfd-scroll tbody tr:first-child td.diff {
+  box-shadow:
+    inset 0 1px 0 var(--dfd-frame),
+    -1px 0 0 var(--dfd-frame),
+    inset -1px 0 0 var(--dfd-frame);
+}
+.dfd-scroll table.full tbody tr:last-child td.diff {
+  box-shadow:
+    0 -1px 0 var(--dfd-frame),
+    -1px 0 0 var(--dfd-frame),
+    -1px -1px 0 var(--dfd-frame),
+    inset -1px 0 0 var(--dfd-frame),
+    inset 0 -1px 0 var(--dfd-frame);
+}
+.dfd-scroll table.full tbody tr:only-child td.diff {
+  box-shadow:
+    inset 0 1px 0 var(--dfd-frame),
+    -1px 0 0 var(--dfd-frame),
+    inset -1px 0 0 var(--dfd-frame),
+    inset 0 -1px 0 var(--dfd-frame);
+}
+/* both sides of a difference carry equal weight – only the side marker tells them apart */
+/* 2 × 18px values + 5px separator + 2 × 3px padding + 1px border = --dfd-row-h */
+.dfd-scroll td.diff {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+.dfd-val {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 18px;
+}
+.dfd-val:first-child {
+  padding-bottom: 2px;
+  margin-bottom: 2px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--st-mismatch) 55%, transparent);
+}
+td.num .dfd-v {
+  flex: 1;
+  text-align: right;
+}
+.dfd-val .dfd-side {
+  margin-left: auto;
+}
+.dfd-scroll td.status,
+.dfd-scroll th.status {
+  width: 1%;
+  text-align: center;
+}
+.dfd-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.dfd-side {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--side);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  align-self: center;
+}
+.dfd-side.l {
+  --side: var(--side-l);
+}
+.dfd-side.r {
+  --side: var(--side-r);
+}
+/* chip followed by the side's name */
+.dfd-sidename {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* invisible characters: plain grey glyphs, no box */
+.dfd-inv {
+  color: rgba(127, 127, 127, 0.9);
+  font-weight: 400;
+  margin: 0 0.5px;
+}
+.dfd-inv.code {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+}
+.dfd-null {
+  color: var(--dfd-muted);
+  font-style: italic;
+  opacity: 0.7;
+}
+/* one row high like every other row: an empty diff has room for exactly one */
+.dfd-scroll td.dfd-empty {
+  height: var(--dfd-row-h);
+  text-align: center;
+  padding: 0 10px;
+  color: var(--dfd-muted);
+}
+.dfd-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ---------- footer ---------- */
+.dfd-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  color: var(--dfd-muted);
+  font-size: 12px;
+}
+.dfd-footer select {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--dfd-line);
+  border-radius: 4px;
+  margin-left: 6px;
+  padding: 1px 4px;
+}
+.dfd-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.dfd-pager button {
+  border: 1px solid var(--dfd-line);
+  background: transparent;
+  border-radius: 4px;
+  width: 26px;
+  height: 24px;
+}
+.dfd-pager button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.dfd-pager span {
+  padding: 0 6px;
+}
+
+/* ---------- detail ---------- */
+.dfd-detail {
+  border: 1px solid var(--dfd-line);
+  border-left: 4px solid var(--c);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.dfd-detail header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--c) 10%, transparent);
+  border-bottom: 1px solid var(--dfd-line);
+}
+.dfd-detail-key {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dfd-close {
+  border: 0;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  opacity: 0.7;
+}
+.dfd-detail-scroll {
+  overflow-x: auto;
+  max-height: 360px;
+}
+.dfd-detail table th,
+.dfd-detail table td {
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--dfd-line);
+  text-align: left;
+  white-space: nowrap;
+}
+.dfd-detail table td.num {
+  text-align: right;
+}
+.dfd-detail thead th {
+  font-weight: 600;
+  font-size: 12px;
+}
+.dfd-detail tbody th {
+  font-weight: 500;
+  width: 1%;
+}
+.dfd-detail tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.dfd-detail tr.diff > * {
+  background-color: color-mix(in srgb, var(--st-mismatch) 20%, transparent);
+}
+.dfd-detail td.mark {
+  color: var(--dfd-muted);
+  font-variant-numeric: tabular-nums;
+}
+.dfd-detail tr.diff td.mark {
+  color: inherit;
+  font-weight: 600;
+}
+.dfd-absent {
+  opacity: 0.4;
+}
+
+/* ---------- column menu (sort & filter) ---------- */
+.dfd {
+  position: relative;
+}
+.dfd-th-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+th.num .dfd-th-top {
+  justify-content: flex-end;
+}
+th.status .dfd-th-top {
+  justify-content: center;
+}
+.dfd-colbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 0;
+  background: none;
+  padding: 0;
+  opacity: 0.35;
+  transition:
+    opacity 0.12s,
+    background 0.12s;
+}
+.dfd-colbtn svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+th:hover .dfd-colbtn,
+.dfd-colbtn:focus-visible,
+.dfd-colbtn.open {
+  opacity: 0.85;
+}
+.dfd-colbtn:hover,
+.dfd-colbtn.open {
+  background: var(--dfd-soft);
+}
+.dfd-colbtn.on {
+  opacity: 1;
+}
+.dfd-colbtn.on svg {
+  fill: currentColor;
+}
+@media (hover: none) {
+  .dfd-colbtn {
+    opacity: 0.6;
+  }
+}
+
+.dfd-colmenu {
+  position: absolute;
+  z-index: 6;
+  width: min(290px, 100%);
+  background: var(--dfd-bg, Canvas);
+  border: 1px solid var(--dfd-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 400;
+}
+.dfd-cm-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px;
+}
+.dfd-cm-sort {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--dfd-line);
+  border-bottom: 1px solid var(--dfd-line);
+  padding: 4px 0;
+}
+.dfd-cm-sort button {
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 5px 6px;
+  border-radius: 5px;
+}
+.dfd-cm-sort button:hover {
+  background: var(--dfd-soft);
+}
+.dfd-cm-sort button.on {
+  font-weight: 600;
+}
+.dfd-cm-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dfd-cm-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--dfd-muted);
+}
+.dfd-colmenu select,
+.dfd-colmenu input:not([type="checkbox"]) {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--dfd-line);
+  border-radius: 5px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+.dfd-colmenu select {
+  flex: 1;
+  max-width: 170px;
+  color: inherit;
+}
+.dfd-colmenu select option {
+  color: initial;
+}
+.dfd-cm-values {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dfd-cm-values input {
+  flex: 1;
+  width: 100%;
+}
+.dfd-cm-and,
+.dfd-cm-values input[data-f="b"] {
+  display: none;
+}
+.dfd-cm-filter.two .dfd-cm-and,
+.dfd-cm-filter.two input[data-f="b"] {
+  display: initial;
+}
+.dfd-cm-and {
+  font-size: 12px;
+  color: var(--dfd-muted);
+}
+.dfd-cm-filter.novalue .dfd-cm-values {
+  display: none;
+}
+.dfd-cm-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--dfd-muted);
+}
+.dfd-cm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.dfd-cm-actions button {
+  border: 1px solid var(--dfd-line);
+  background: transparent;
+  border-radius: 5px;
+  padding: 4px 10px;
+}
+.dfd-cm-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.dfd-cm-actions button.primary {
+  background: var(--dfd-soft);
+  border-color: currentColor;
+  font-weight: 600;
+}
+
+.dfd-pillfilter.col {
+  background: var(--dfd-soft);
+  border: 1px solid var(--dfd-line);
+}
+.dfd-pill-edit {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+}
+.dfd-pill-edit b {
+  font-weight: 600;
+}
+
+/* ---------- per-column match stats ---------- */
+.dfd-colstats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+th.num .dfd-colstats {
+  justify-content: flex-end;
+}
+.dfd-bar2 {
+  display: flex;
+  width: 48px;
+  height: 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  gap: 1px;
+  flex: none;
+}
+.dfd-bar2 .eq {
+  background: var(--st-equal);
+}
+.dfd-bar2 .mm {
+  background: var(--st-mismatch);
+}
+.dfd-colstats .dfd-delta {
+  font-size: 11px;
+}
+
+/* ---------- loading & errors ---------- */
+.dfd .dfd-scroll,
+.dfd .dfd-footer {
+  transition: opacity 0.15s;
+}
+.dfd.loading .dfd-scroll,
+.dfd.loading .dfd-footer {
+  opacity: 0.55;
+}
+.dfd-error {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--dfd-danger) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dfd-danger) 45%, transparent);
+}
+.dfd-error[hidden] {
+  display: none;
+}
+.dfd button:disabled {
+  cursor: default;
+}
+
+/* ---------- reduced motion ----------
+   Last in the file and !important on purpose: the user's preference must win
+   over every transition declared above, whatever its specificity. */
+@media (prefers-reduced-motion: reduce) {
+  .dfd * {
+    /* biome-ignore lint/complexity/noImportantStyles: user preference must override all transitions */
+    transition: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: user preference must override smooth scrolling */
+    scroll-behavior: auto !important;
+  }
+}
