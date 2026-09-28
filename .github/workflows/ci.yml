@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call: # the release workflow runs the full CI before publishing
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0 # no floating major tags since v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run ty check
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npx biome ci          # formatting + lint for JS, CSS and JSON
+      - run: npx tsc -p .          # JSDoc type check (strict), no emit
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: windows-latest
+            python: "3.13"
+          - os: macos-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0 # no floating major tags since v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked --group test
+      - run: uv run pytest --cov --cov-report=term
+
+  e2e:
+    name: browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0 # no floating major tags since v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --group e2e
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest tests/e2e
+        env:
+          DFD_SCREENSHOTS: screenshots
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # full history: hatch-vcs derives the version from the latest tag
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.2.0 # no floating major tags since v7
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - name: Check that the frontend assets are packaged
+        run: |
+          unzip -l dist/*.whl | grep -q "dference/static/widget.js"
+          unzip -l dist/*.whl | grep -q "dference/static/widget.css"
+      - name: Smoke-test the built wheel in a clean environment
+        run: uv run --isolated --no-project --with dist/*.whl python -c "import dference; print(dference.__version__)"
