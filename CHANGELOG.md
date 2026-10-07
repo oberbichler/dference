@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Table rows keep one height with multi-line text: a cell shows only the first
+  line plus a `⋯` button that opens the full text in a flyover. For a
+  difference the flyover shows both sides next to each other, with numbered
+  lines and the differing lines highlighted.
+
 ## [0.1.0] - 2026-10-06
 
 First release.

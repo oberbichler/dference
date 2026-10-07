@@ -590,3 +590,68 @@ def test_empty_diff_keeps_room_for_the_message(page: Page) -> None:
     ui = Harness(page, DataFrameDiff(empty, empty, key="id")).mount()
     assert "No rows match" in ui.page.locator(".dfd-scroll").inner_text()
     assert ui.page.locator(".dfd-scroll").evaluate("el => el.scrollHeight <= el.clientHeight")
+
+
+# ---- multi-line text ------------------------------------------------------------------
+
+
+def multiline_ui(page: Page) -> Harness:
+    left = pl.DataFrame(
+        {"id": [1, 2, 3], "text": ["one\ntwo\nthree", "same\ntext", "single"], "n": [1, 2, 3]}
+    )
+    right = pl.DataFrame(
+        {"id": [1, 2, 3], "text": ["one\nTWO\nthree", "same\ntext", "single"], "n": [1, 2, 4]}
+    )
+    return Harness(page, DataFrameDiff(left, right, key="id")).mount()
+
+
+def test_multiline_values_show_the_first_line_and_keep_the_row_height(page: Page) -> None:
+    ui = multiline_ui(page)
+    heights = ui.page.eval_on_selector_all(
+        ".dfd-scroll tbody tr[data-id]", "trs => trs.map(tr => tr.getBoundingClientRect().height)"
+    )
+    assert set(heights) == {48}
+    diff = ui.page.locator('.dfd-scroll tr[data-id="0"] td.diff')
+    assert diff.locator(".dfd-v").all_inner_texts() == ["one↵⋯", "one↵⋯"]
+    assert diff.locator(".dfd-more").count() == 2
+    equal = ui.page.locator('.dfd-scroll tr[data-id="1"] td').nth(ui.col("text") + 2)
+    assert equal.inner_text() == "same↵⋯"
+    ui.page.uncheck('[data-act="show-inv"]')
+    assert equal.inner_text() == "same⋯"
+    # a single-line value has no button
+    assert ui.page.locator('.dfd-scroll tr[data-id="2"] .dfd-more').count() == 0
+
+
+def test_flyover_compares_the_full_text(page: Page) -> None:
+    ui = multiline_ui(page)
+    ui.page.locator('.dfd-scroll tr[data-id="0"] .dfd-more').first.click()
+    fly = ui.page.locator(".dfd-flyover")
+    assert fly.is_visible()
+    assert ui.page.locator(".dfd-detail").count() == 0  # the row did not open
+    sides = fly.locator("section")
+    assert sides.count() == 2
+    lines = sides.nth(0).locator(".dfd-fly-line").all_inner_texts()
+    assert [line.split() for line in lines] == [["1", "one↵"], ["2", "two↵"], ["3", "three"]]
+    diff_lines = sides.nth(1).locator(".dfd-fly-line.diff")
+    assert diff_lines.count() == 1
+    assert "TWO" in diff_lines.inner_text()
+    ui.screenshot("flyover")
+    ui.page.keyboard.press("Escape")
+    assert fly.count() == 0
+
+
+def test_flyover_of_a_single_value_and_closing(page: Page) -> None:
+    ui = multiline_ui(page)
+    more = ui.page.locator('.dfd-scroll tr[data-id="1"] .dfd-more')
+    more.click()
+    fly = ui.page.locator(".dfd-flyover")
+    assert fly.locator("section").count() == 1
+    assert fly.locator(".dfd-fly-line.diff").count() == 0
+    more.click()  # the same button toggles it
+    assert fly.count() == 0
+    more.click()
+    ui.page.locator(".dfd-overview").click()  # outside
+    assert fly.count() == 0
+    more.click()
+    ui.page.locator('[data-act="close-flyover"]').click()
+    assert fly.count() == 0

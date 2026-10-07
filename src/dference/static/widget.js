@@ -186,6 +186,16 @@ function hasInvisible(s) {
 }
 
 /**
+ * Grey marker for one invisible character.
+ * @param {string} c
+ */
+function invMark(c) {
+  const [sym, name] = INV_NAMES[c] ?? [hex(c), "control / invisible character"];
+  const cls = sym.length > 1 ? "dfd-inv code" : "dfd-inv";
+  return `<span class="${cls}" title="${hex(c)} ${name}">${esc(sym)}</span>`;
+}
+
+/**
  * HTML for a string with its invisible characters rendered as grey markers.
  * @param {string} s
  */
@@ -197,9 +207,7 @@ function visualize(s) {
     .map((c, i) => {
       if (c === " ") return mark[i] ? '<span class="dfd-inv" title="U+0020 space">␣</span>' : " ";
       if (!INV_RE.test(c)) return esc(c);
-      const [sym, name] = INV_NAMES[c] ?? [hex(c), "control / invisible character"];
-      const cls = sym.length > 1 ? "dfd-inv code" : "dfd-inv";
-      return `<span class="${cls}" title="${hex(c)} ${name}">${esc(sym)}</span>${c === "\n" ? "<br>" : ""}`;
+      return `${invMark(c)}${c === "\n" ? "<br>" : ""}`;
     })
     .join("");
 }
@@ -241,6 +249,46 @@ function fmt(v, showInvisible) {
   if (showInvisible && hasInvisible(v)) return visualize(v);
   return esc(v);
 }
+
+// --------------------------------------------------------------- line breaks
+// A table row is always one line high: a multi-line string shows its first line
+// and a button that opens the whole text in a flyover.
+
+const LINE_BREAK_RE = /\r\n|[\n\r\u2028\u2029]/;
+
+/**
+ * Lines of a string with line breaks, or `null` for any other value.
+ * @param {Value|undefined} v
+ * @returns {string[]|null}
+ */
+const linesOf = (v) => (typeof v === "string" && LINE_BREAK_RE.test(v) ? v.split(LINE_BREAK_RE) : null);
+
+/**
+ * The line breaks of a string, in order (`"\r\n"` counts as one).
+ * @param {string} v
+ */
+const breaksOf = (v) => v.match(new RegExp(LINE_BREAK_RE.source, "g")) ?? [];
+
+/**
+ * HTML for the first line of a multi-line string, followed by its line break
+ * (as a marker when invisible characters are shown).
+ * @param {string} v
+ * @param {boolean} showInvisible
+ */
+function firstLine(v, showInvisible) {
+  const m = /** @type {RegExpExecArray} */ (LINE_BREAK_RE.exec(v));
+  const head = v.slice(0, m.index);
+  if (!showInvisible) return esc(head);
+  return (head && hasInvisible(head) ? visualize(head) : esc(head)) + Array.from(m[0]).map(invMark).join("");
+}
+
+/**
+ * HTML for one line inside the flyover: like `visualize`, but an empty line
+ * stays empty (it is a line, not an empty string).
+ * @param {string} line
+ * @param {boolean} showInvisible
+ */
+const fmtLine = (line, showInvisible) => (showInvisible && line && hasInvisible(line) ? visualize(line) : esc(line));
 
 // ------------------------------------------------------------ column filters
 
@@ -329,6 +377,8 @@ function render({ model, el }) {
     filters: /** @type {Map<number, Filter>} */ (new Map()),
     /** Open header popover: a column index or the status column. */
     colMenu: /** @type {number|"status"|null} */ (null),
+    /** Cell whose full text is shown in the flyover. */
+    flyover: /** @type {{row: Row, col: number}|null} */ (null),
     /** Row shown in the detail panel and its position in the view. */
     detail: /** @type {{row: Row, pos: number}|null} */ (null),
   };
@@ -382,6 +432,21 @@ function render({ model, el }) {
       : `<span class="dfd-side r" title="${esc(M.R)} (right)">${esc(M.RS)}</span>`;
   /** @param {Value|undefined} v */
   const F = (v) => fmt(v, state.showInvisible);
+  /**
+   * Like `F`, but a multi-line string shows its first line only, with a button
+   * that opens the whole text: every row of the table stays one line high.
+   * @param {Value|undefined} v
+   * @param {Row} row
+   * @param {number} i Column of the value.
+   */
+  function cellHtml(v, row, i) {
+    const lines = linesOf(v);
+    if (!lines) return F(v);
+    const open = state.flyover?.row.id === row.id && state.flyover.col === i;
+    return `${firstLine(/** @type {string} */ (v), state.showInvisible)}<button class="dfd-more ${open ? "open" : ""}"
+      data-more="${row.id}:${i}" aria-haspopup="dialog" aria-label="Show full text (${n(lines.length)} lines)"
+      title="Show full text (${n(lines.length)} lines)">⋯</button>`;
+  }
 
   /**
    * Value of column `i` in a row (`undefined` if the column cannot exist there).
@@ -426,6 +491,7 @@ function render({ model, el }) {
       <div class="dfd-footer"></div>
       <div class="dfd-detail-wrap"></div>
       <div class="dfd-colmenu-wrap"></div>
+      <div class="dfd-flyover-wrap"></div>
     </div>`;
   const root = /** @type {HTMLElement} */ (el.firstElementChild);
 
@@ -755,14 +821,21 @@ function render({ model, el }) {
       const inv = onlyInvisible(l, r);
       const title = `${inv ? "Differs only in invisible characters\n" : ""}${M.L}: ${literal(l)}\n${M.R}: ${literal(r)}${d ? `\nΔ ${d}` : ""}`;
       return `<td class="${cls} diff ${inv ? "inv-only" : ""}" title="${esc(title)}">
-        <div class="dfd-val"><span class="dfd-v">${F(l)}</span>${chip("l")}</div>
-        <div class="dfd-val"><span class="dfd-v">${F(r)}</span>${chip("r")}</div></td>`;
+        <div class="dfd-val"><span class="dfd-v">${cellHtml(l, row, i)}</span>${chip("l")}</div>
+        <div class="dfd-val"><span class="dfd-v">${cellHtml(r, row, i)}</span>${chip("r")}</div></td>`;
     }
     const v = cellValue(row, i);
-    return v === undefined ? `<td class="${cls} absent">–</td>` : `<td class="${cls}">${F(v)}</td>`;
+    return v === undefined ? `<td class="${cls} absent">–</td>` : `<td class="${cls}">${cellHtml(v, row, i)}</td>`;
   }
 
   function renderTable() {
+    if (state.flyover) {
+      // a new page may hold a fresh copy of the row – or no longer hold it
+      const id = state.flyover.row.id;
+      const row = view.rows.find((r) => r.id === id);
+      if (row) state.flyover.row = row;
+      else closeFlyover();
+    }
     const cols = visibleCols();
     const rows = view.rows;
     const pages = Math.max(1, Math.ceil(view.filtered / state.pageSize));
@@ -929,6 +1002,104 @@ function render({ model, el }) {
     }
   }
 
+  // -------------------------------------------------------------- flyover
+
+  /**
+   * Render the full text of the cell in `state.flyover`. A difference shows both
+   * sides next to each other, with the lines that differ highlighted.
+   */
+  function renderFlyover() {
+    const wrap = $(".dfd-flyover-wrap");
+    const fly = state.flyover;
+    if (!fly) {
+      wrap.innerHTML = "";
+      return;
+    }
+    const { row, col } = fly;
+    const c = M.columns[col];
+    const both = !!(row.l && row.r && row.d.includes(col));
+    /** @type {["l"|"r"|null, Value|undefined][]} */
+    const sides = both
+      ? [
+          ["l", row.l?.[col]],
+          ["r", row.r?.[col]],
+        ]
+      : [[null, cellValue(row, col)]];
+    const all = sides.map(([, v]) => linesOf(v));
+    /**
+     * Full text of one side, one numbered line per line.
+     * @param {Value|undefined} v
+     * @param {number} k Index of the side.
+     */
+    const text = (v, k) => {
+      const lines = all[k];
+      if (!lines)
+        return `<div class="dfd-fly-text"><div class="dfd-fly-line ${both ? "diff" : ""}"><span class="dfd-ln"></span><span>${F(v)}</span></div></div>`;
+      const other = both ? all[1 - k] : null;
+      const breaks = breaksOf(/** @type {string} */ (v));
+      const html = lines
+        .map((line, j) => {
+          const differs = both && (!other || other[j] !== line);
+          const brk = state.showInvisible && j < breaks.length ? Array.from(breaks[j]).map(invMark).join("") : "";
+          return `<div class="dfd-fly-line ${differs ? "diff" : ""}"><span class="dfd-ln">${j + 1}</span><span>${fmtLine(line, state.showInvisible)}${brk}</span></div>`;
+        })
+        .join("");
+      return `<div class="dfd-fly-text">${html}</div>`;
+    };
+    const body = sides
+      .map(
+        ([side, v], k) => `<section>
+          ${side ? `<div class="dfd-fly-head dfd-sidename">${chip(side)}${esc(side === "l" ? M.L : M.R)}</div>` : ""}
+          ${text(v, k)}</section>`,
+      )
+      .join("");
+    wrap.innerHTML = `
+      <div class="dfd-flyover ${both ? "two" : ""}" role="dialog" aria-label="Full text of ${esc(c.name)}">
+        <div class="dfd-cm-title"><b>${esc(c.name)}</b><span class="dfd-dtype">${esc(c.dtype)}</span>
+          <span class="dfd-spacer"></span>
+          <button class="dfd-close" data-act="close-flyover" aria-label="Close">×</button></div>
+        <div class="dfd-fly-sides">${body}</div>
+      </div>`;
+    const box = /** @type {HTMLElement} */ (wrap.firstElementChild);
+    const btn = root.querySelector(`.dfd-scroll [data-more="${row.id}:${col}"]`);
+    if (btn) {
+      const rr = root.getBoundingClientRect();
+      const br = btn.getBoundingClientRect();
+      box.style.top = `${br.bottom - rr.top + 4}px`;
+      box.style.left = `${Math.max(0, Math.min(br.left - rr.left, rr.width - box.offsetWidth))}px`;
+    }
+    box.querySelector("button")?.focus({ preventScroll: true });
+  }
+
+  /** Mark the button whose flyover is open. */
+  function syncMoreButtons() {
+    const open = state.flyover ? `${state.flyover.row.id}:${state.flyover.col}` : null;
+    for (const b of root.querySelectorAll(".dfd-more")) {
+      if (b instanceof HTMLElement) b.classList.toggle("open", b.dataset.more === open);
+    }
+  }
+
+  /**
+   * Toggle the flyover of a cell, given as `"<row id>:<column>"`.
+   * @param {string} ref
+   */
+  function openFlyover(ref) {
+    const [id, col] = ref.split(":").map(Number);
+    const row = view.rows.find((r) => r.id === id);
+    const same = state.flyover?.row.id === id && state.flyover.col === col;
+    closeColMenu();
+    state.flyover = same || !row ? null : { row, col };
+    renderFlyover();
+    syncMoreButtons();
+  }
+
+  function closeFlyover() {
+    if (state.flyover === null) return;
+    state.flyover = null;
+    renderFlyover();
+    syncMoreButtons();
+  }
+
   // ---------------------------------------------------------- column menu
 
   /**
@@ -1013,6 +1184,7 @@ function render({ model, el }) {
    * @param {Element} anchor
    */
   function openColMenu(i, anchor) {
+    closeFlyover();
     state.colMenu = state.colMenu === i ? null : i;
     renderColMenu(anchor);
     syncColButtons();
@@ -1153,6 +1325,8 @@ function render({ model, el }) {
       return changed();
     }
     if (t.closest(".dfd-colmenu")) return;
+    const more = closest(t, "[data-more]");
+    if (more) return openFlyover(more.dataset.more ?? "");
 
     const act = closest(t, "[data-act]")?.dataset.act;
     switch (act) {
@@ -1178,6 +1352,8 @@ function render({ model, el }) {
         selected.clear();
         syncSelection();
         return renderTable();
+      case "close-flyover":
+        return closeFlyover();
       case "close-detail":
         state.detail = null;
         renderTable();
@@ -1261,6 +1437,7 @@ function render({ model, el }) {
       case "show-inv":
         state.showInvisible = checked;
         renderTable();
+        renderFlyover();
         return renderDetail();
       case "page-size":
         state.pageSize = Number(t.value);
@@ -1275,6 +1452,12 @@ function render({ model, el }) {
   function onDocClick(e) {
     const path = e.composedPath();
     if (
+      state.flyover !== null &&
+      !path.includes($(".dfd-flyover-wrap")) &&
+      !path.some((x) => x instanceof HTMLElement && x.dataset.more !== undefined)
+    )
+      closeFlyover();
+    if (
       state.colMenu !== null &&
       !path.includes($(".dfd-colmenu-wrap")) &&
       !path.some((x) => x instanceof HTMLElement && x.dataset.colmenu !== undefined)
@@ -1288,8 +1471,9 @@ function render({ model, el }) {
    * @param {KeyboardEvent} e
    */
   function onDocKey(e) {
-    if (e.key !== "Escape" || state.colMenu === null) return;
+    if (e.key !== "Escape") return;
     closeColMenu();
+    closeFlyover();
   }
 
   /**
@@ -1322,16 +1506,20 @@ function render({ model, el }) {
   /** New comparison from Python (e.g. widget re-used): reset and refetch. */
   function onMeta() {
     M = meta();
-    Object.assign(state, { diffColumn: null, diffEqual: false, detail: null, colMenu: null });
+    Object.assign(state, { diffColumn: null, diffEqual: false, detail: null, colMenu: null, flyover: null });
     state.filters.clear();
     renderColMenu();
+    renderFlyover();
     changed({ overview: true });
   }
   function onSelectionFromPython() {
     selected = new Set(model.get("selected_ids") || []);
     renderTable();
   }
-  const onScroll = () => closeColMenu();
+  const onScroll = () => {
+    closeColMenu();
+    closeFlyover();
+  };
 
   root.addEventListener("click", onClick);
   root.addEventListener("change", onChange);
