@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-07
+
 ### Changed
 
 - Table rows keep one height with multi-line text: a cell shows only the first
@@ -64,5 +66,6 @@ First release.
   version comes from the git tag (hatch-vcs), so nothing needs to be bumped.
 - ISC license.
 
-[Unreleased]: https://github.com/oberbichler/dference/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/oberbichler/dference/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/oberbichler/dference/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/oberbichler/dference/releases/tag/v0.1.0
