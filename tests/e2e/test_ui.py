@@ -712,3 +712,21 @@ def test_flyover_of_a_single_value_and_closing(page: Page) -> None:
     more.click()
     ui.page.locator('[data-act="close-flyover"]').click()
     assert fly.count() == 0
+
+
+def test_text_diff_can_be_turned_off(page: Page) -> None:
+    ui = text_diff_ui(page)
+    ui.click('.dfd-scroll tr[data-id="0"] td.status')
+    detail = ui.page.locator(".dfd-detail")
+    assert detail.locator(".dfd-ud").count() == 1
+    ui.page.uncheck('[data-act="text-diff"]')
+    assert detail.locator(".dfd-ud").count() == 0
+    assert detail.locator("mark.dfd-dx").count() == 0
+    # the flyover falls back to both sides next to each other
+    ui.page.locator('.dfd-scroll tr[data-id="0"] .dfd-more').first.click()
+    fly = ui.page.locator(".dfd-flyover")
+    assert fly.locator(".dfd-ud").count() == 0
+    assert fly.locator("section").count() == 2
+    ui.page.keyboard.press("Escape")
+    ui.page.check('[data-act="text-diff"]')
+    assert detail.locator(".dfd-ud").count() == 1

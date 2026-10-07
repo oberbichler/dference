@@ -610,6 +610,8 @@ function render({ model, el }) {
     pageSize: model.get("page_size") || 10,
     onlyDiffCols: false,
     showInvisible: true,
+    /** Compare differing texts like `git diff` (detail view and flyover). */
+    textDiff: true,
     /** Quick filter from a column header: rows that differ (`≠`) or are equal (`=`) in it. */
     diffColumn: /** @type {number|null} */ (null),
     diffEqual: false,
@@ -672,12 +674,13 @@ function render({ model, el }) {
   /** @param {Value|undefined} v */
   const F = (v) => fmt(v, state.showInvisible);
   /**
-   * Unified diff of two strings as HTML, `null` if they are too large to diff.
+   * Unified diff of two strings as HTML, `null` if text diff is off or the texts are too large.
    * Removed lines carry the left side's colour, added lines the right side's.
    * @param {string} a Left value.
    * @param {string} b Right value.
    */
   function diffHtml(a, b) {
+    if (!state.textDiff) return null;
     const lines = unifiedDiff(a, b);
     if (!lines) return null;
     const sign = { "=": " ", "-": "−", "+": "+", "…": "" };
@@ -744,6 +747,8 @@ function render({ model, el }) {
         <label class="dfd-toggle"><input type="checkbox" data-act="only-diff"> Differing columns only</label>
         <label class="dfd-toggle" title="Mark spaces at the start/end or repeated, tabs, line breaks, no-break and zero-width characters">
           <input type="checkbox" data-act="show-inv" checked> Show invisible characters</label>
+        <label class="dfd-toggle" title="Compare differing texts line by line like git diff, with the words that differ highlighted">
+          <input type="checkbox" data-act="text-diff" checked> Text diff</label>
         <span class="dfd-toolbar-dyn"></span>
         <span class="dfd-spacer"></span>
         <button class="dfd-btn" data-act="export" title="Download all filtered rows as CSV">Export CSV</button>
@@ -1220,7 +1225,7 @@ function render({ model, el }) {
                 : "";
         let [lh, rh] = [show(lv), show(rv)];
         let below = "";
-        if (isDiff && typeof lv === "string" && typeof rv === "string" && lv && rv) {
+        if (state.textDiff && isDiff && typeof lv === "string" && typeof rv === "string" && lv && rv) {
           if (linesOf(lv) || linesOf(rv)) {
             // texts: first lines here, the unified diff in a row of its own below
             const ud = diffHtml(lv, rv);
@@ -1722,6 +1727,10 @@ function render({ model, el }) {
       case "show-inv":
         state.showInvisible = checked;
         renderTable();
+        renderFlyover();
+        return renderDetail();
+      case "text-diff":
+        state.textDiff = checked;
         renderFlyover();
         return renderDetail();
       case "page-size":
