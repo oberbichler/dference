@@ -582,6 +582,99 @@ td.num .dfd-v {
   white-space: nowrap;
 }
 
+/* ---------- multi-line text ----------
+   A row is always one line high: a multi-line value shows its first line and a
+   button that opens the whole text in a flyover. */
+.dfd-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  min-width: 20px;
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--dfd-line);
+  border-radius: 4px;
+  background: var(--dfd-soft);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: 1px;
+}
+.dfd-more:hover,
+.dfd-more.open {
+  background: rgba(127, 127, 127, 0.22);
+  border-color: currentColor;
+}
+.dfd-flyover {
+  position: absolute;
+  z-index: 6;
+  width: min(420px, 100%);
+  background: var(--dfd-bg, Canvas);
+  border: 1px solid var(--dfd-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: auto;
+}
+.dfd-flyover.two {
+  width: min(760px, 100%);
+}
+.dfd-flyover .dfd-cm-title {
+  align-items: center;
+}
+.dfd-fly-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+.dfd-fly-sides section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dfd-fly-head {
+  font-size: 12px;
+  font-weight: 600;
+}
+.dfd-fly-text {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--dfd-line);
+  border-radius: 6px;
+  padding: 4px 0;
+  font-family: var(--marimo-monospace-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 18px;
+}
+.dfd-fly-line {
+  display: flex;
+  gap: 8px;
+  padding: 0 8px 0 0;
+  min-height: 18px;
+}
+.dfd-fly-line > span:last-child {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dfd-fly-line.diff {
+  background-color: color-mix(in srgb, var(--st-mismatch) 20%, transparent);
+}
+.dfd-ln {
+  flex: none;
+  width: 3.5ch;
+  text-align: right;
+  color: var(--dfd-muted);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- footer ---------- */
 .dfd-footer {
   display: flex;
