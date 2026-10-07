@@ -661,10 +661,10 @@ TEXT_R = "\n".join(
 )
 
 
-def text_diff_ui(page: Page) -> Harness:
+def text_diff_ui(page: Page, *, text_diff: bool = True) -> Harness:
     left = pl.DataFrame({"id": [1], "city": ["Musterstraße 12"], "text": [TEXT_L]})
     right = pl.DataFrame({"id": [1], "city": ["Musterstr. 12"], "text": [TEXT_R]})
-    return Harness(page, DataFrameDiff(left, right, key="id")).mount()
+    return Harness(page, DataFrameDiff(left, right, key="id", text_diff=text_diff)).mount()
 
 
 def test_unified_diff_matches_lines_and_collapses_context(page: Page) -> None:
@@ -729,4 +729,16 @@ def test_text_diff_can_be_turned_off(page: Page) -> None:
     assert fly.locator("section").count() == 2
     ui.page.keyboard.press("Escape")
     ui.page.check('[data-act="text-diff"]')
+    assert detail.locator(".dfd-ud").count() == 1
+
+
+def test_text_diff_off_from_python(page: Page) -> None:
+    ui = text_diff_ui(page, text_diff=False)
+    assert not ui.page.locator('[data-act="text-diff"]').is_checked()
+    ui.click('.dfd-scroll tr[data-id="0"] td.status')
+    detail = ui.page.locator(".dfd-detail")
+    assert detail.locator(".dfd-ud").count() == 0
+    # switching the trait in Python updates the toggle and the open detail view
+    ui.set_trait("text_diff", True)
+    assert ui.page.locator('[data-act="text-diff"]').is_checked()
     assert detail.locator(".dfd-ud").count() == 1

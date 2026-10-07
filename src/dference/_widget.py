@@ -59,6 +59,11 @@ class DataFrameDiff(anywidget.AnyWidget):
         strict: Require identical dtypes on both sides; ``False`` aligns
             lossless differences (see :func:`~dference.compare`).
         page_size: Initial rows per page (the user can change it).
+        text_diff: Compare differing texts like ``git diff`` (a unified diff
+            with the differing words highlighted) in the detail view and the
+            full-text flyover. This is the initial state of the *Text diff*
+            toggle (the user can change it); ``False`` shows both sides next
+            to each other instead.
         **kwargs: Passed on to :class:`anywidget.AnyWidget`.
     """
 
@@ -72,6 +77,7 @@ class DataFrameDiff(anywidget.AnyWidget):
     left_short = traitlets.Unicode("L").tag(sync=True)
     right_short = traitlets.Unicode("R").tag(sync=True)
     page_size = traitlets.Int(10).tag(sync=True)
+    text_diff = traitlets.Bool(True).tag(sync=True)
     #: Row ids checked in the widget (see :meth:`selected_frame`).
     selected_ids = traitlets.List(traitlets.Int()).tag(sync=True)
 
@@ -88,6 +94,7 @@ class DataFrameDiff(anywidget.AnyWidget):
         ignore_columns: Iterable[str] = (),
         strict: bool = True,
         page_size: int = 10,
+        text_diff: bool = True,
         **kwargs: Any,
     ) -> None:
         result = compare(
@@ -99,7 +106,14 @@ class DataFrameDiff(anywidget.AnyWidget):
             ignore_columns=ignore_columns,
             strict=strict,
         )
-        self._init_from_result(result, left_short, right_short, page_size, kwargs)
+        self._init_from_result(
+            result,
+            left_short=left_short,
+            right_short=right_short,
+            page_size=page_size,
+            text_diff=text_diff,
+            kwargs=kwargs,
+        )
 
     @classmethod
     def from_result(
@@ -109,19 +123,29 @@ class DataFrameDiff(anywidget.AnyWidget):
         left_short: str | None = None,
         right_short: str | None = None,
         page_size: int = 10,
+        text_diff: bool = True,
         **kwargs: Any,
     ) -> DataFrameDiff:
         """Create a widget for an existing :func:`~dference.compare` result."""
         self = cls.__new__(cls)
-        self._init_from_result(result, left_short, right_short, page_size, kwargs)
+        self._init_from_result(
+            result,
+            left_short=left_short,
+            right_short=right_short,
+            page_size=page_size,
+            text_diff=text_diff,
+            kwargs=kwargs,
+        )
         return self
 
     def _init_from_result(
         self,
         result: DiffResult,
+        *,
         left_short: str | None,
         right_short: str | None,
         page_size: int,
+        text_diff: bool,
         kwargs: dict[str, Any],
     ) -> None:
         self._result = result
@@ -136,6 +160,7 @@ class DataFrameDiff(anywidget.AnyWidget):
             left_short=ls,
             right_short=rs,
             page_size=page_size,
+            text_diff=text_diff,
             **kwargs,
         )
         self.on_msg(self._handle_message)

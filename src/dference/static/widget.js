@@ -50,6 +50,7 @@
  * @property {string} left_short
  * @property {string} right_short
  * @property {number} page_size
+ * @property {boolean} text_diff
  * @property {number[]} selected_ids
  */
 /**
@@ -611,7 +612,7 @@ function render({ model, el }) {
     onlyDiffCols: false,
     showInvisible: true,
     /** Compare differing texts like `git diff` (detail view and flyover). */
-    textDiff: true,
+    textDiff: model.get("text_diff") ?? true,
     /** Quick filter from a column header: rows that differ (`≠`) or are equal (`=`) in it. */
     diffColumn: /** @type {number|null} */ (null),
     diffEqual: false,
@@ -748,7 +749,7 @@ function render({ model, el }) {
         <label class="dfd-toggle" title="Mark spaces at the start/end or repeated, tabs, line breaks, no-break and zero-width characters">
           <input type="checkbox" data-act="show-inv" checked> Show invisible characters</label>
         <label class="dfd-toggle" title="Compare differing texts line by line like git diff, with the words that differ highlighted">
-          <input type="checkbox" data-act="text-diff" checked> Text diff</label>
+          <input type="checkbox" data-act="text-diff" ${state.textDiff ? "checked" : ""}> Text diff</label>
         <span class="dfd-toolbar-dyn"></span>
         <span class="dfd-spacer"></span>
         <button class="dfd-btn" data-act="export" title="Download all filtered rows as CSV">Export CSV</button>
@@ -1806,6 +1807,13 @@ function render({ model, el }) {
     renderFlyover();
     changed({ overview: true });
   }
+  /** Text diff switched from Python: follow it like the toggle. */
+  function onTextDiffFromPython() {
+    state.textDiff = model.get("text_diff") ?? true;
+    /** @type {HTMLInputElement} */ ($('[data-act="text-diff"]')).checked = state.textDiff;
+    renderFlyover();
+    renderDetail();
+  }
   function onSelectionFromPython() {
     selected = new Set(model.get("selected_ids") || []);
     renderTable();
@@ -1830,6 +1838,7 @@ function render({ model, el }) {
     model.on(`change:${name}`, onMeta);
   }
   model.on("change:selected_ids", onSelectionFromPython);
+  model.on("change:text_diff", onTextDiffFromPython);
 
   renderOverview();
   renderTable();
@@ -1846,6 +1855,7 @@ function render({ model, el }) {
       model.off(`change:${name}`, onMeta);
     }
     model.off("change:selected_ids", onSelectionFromPython);
+    model.off("change:text_diff", onTextDiffFromPython);
   };
 }
 

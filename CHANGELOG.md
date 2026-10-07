@@ -15,7 +15,8 @@ All notable changes to this project are documented here. The format follows
   highlighted. Single-line differences in the detail view are highlighted word
   by word in place.
   The toolbar toggle *Text diff* turns it off (both sides next to each other
-  instead).
+  instead); `DataFrameDiff(..., text_diff=False)` and
+  `DataFrameDiff.from_result(..., text_diff=False)` set its initial state.
 
 ## [0.2.0] - 2026-10-07
 
