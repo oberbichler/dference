@@ -622,22 +622,79 @@ def test_multiline_values_show_the_first_line_and_keep_the_row_height(page: Page
     assert ui.page.locator('.dfd-scroll tr[data-id="2"] .dfd-more').count() == 0
 
 
-def test_flyover_compares_the_full_text(page: Page) -> None:
+def test_flyover_shows_a_unified_diff(page: Page) -> None:
     ui = multiline_ui(page)
     ui.page.locator('.dfd-scroll tr[data-id="0"] .dfd-more').first.click()
     fly = ui.page.locator(".dfd-flyover")
     assert fly.is_visible()
     assert ui.page.locator(".dfd-detail").count() == 0  # the row did not open
-    sides = fly.locator("section")
-    assert sides.count() == 2
-    lines = sides.nth(0).locator(".dfd-fly-line").all_inner_texts()
-    assert [line.split() for line in lines] == [["1", "one↵"], ["2", "two↵"], ["3", "three"]]
-    diff_lines = sides.nth(1).locator(".dfd-fly-line.diff")
-    assert diff_lines.count() == 1
-    assert "TWO" in diff_lines.inner_text()
-    ui.screenshot("flyover")
+    lines = fly.locator(".dfd-ud-line")
+    assert [" ".join(t.split()) for t in lines.all_inner_texts()] == [
+        "1 1 one↵",
+        "2 − two↵",
+        "2 + TWO↵",
+        "3 3 three",
+    ]
+    # lines without a word in common differ as a whole: no word highlighting
+    assert fly.locator("mark.dfd-dx").count() == 0
     ui.page.keyboard.press("Escape")
     assert fly.count() == 0
+
+
+TEXT_L = "\n".join(
+    ["Dear customer,", "", "your order 4711 has shipped.", "Delivery: Monday", "", "Kind regards,"]
+    + [f"Line {i}" for i in range(1, 9)]
+    + ["Your shop team"]
+)
+TEXT_R = "\n".join(
+    [
+        "Dear customer,",
+        "",
+        "your order 4712 has been shipped today.",
+        "Tracking: DE-123",
+        "Delivery: Tuesday",
+        "",
+        "Kind regards,",
+    ]
+    + [f"Line {i}" for i in range(1, 9)]
+    + ["Your  shop team "]
+)
+
+
+def text_diff_ui(page: Page) -> Harness:
+    left = pl.DataFrame({"id": [1], "city": ["Musterstraße 12"], "text": [TEXT_L]})
+    right = pl.DataFrame({"id": [1], "city": ["Musterstr. 12"], "text": [TEXT_R]})
+    return Harness(page, DataFrameDiff(left, right, key="id")).mount()
+
+
+def test_unified_diff_matches_lines_and_collapses_context(page: Page) -> None:
+    ui = text_diff_ui(page)
+    ui.page.locator('.dfd-scroll tr[data-id="0"] .dfd-more').first.click()
+    fly = ui.page.locator(".dfd-flyover")
+    ops = fly.locator(".dfd-ud-line").evaluate_all(
+        "ls => ls.map(l => l.className.split(' ').pop())"
+    )
+    # an inserted line does not shift the lines after it
+    assert ops.count("del") == 3
+    assert ops.count("add") == 4
+    assert "gap" in ops  # the unchanged lines in between are collapsed
+    assert "⋯ 4 unchanged lines" in fly.inner_text()
+    # words that differ within a changed line are highlighted
+    assert fly.locator(".del mark.dfd-dx").all_inner_texts()[:2] == ["4711", "Monday"]
+    ui.screenshot("diff-flyover")
+    ui.page.keyboard.press("Escape")
+
+
+def test_detail_view_shows_the_diff_below_the_values(page: Page) -> None:
+    ui = text_diff_ui(page)
+    ui.click('.dfd-scroll tr[data-id="0"] td.status')
+    detail = ui.page.locator(".dfd-detail")
+    assert detail.locator(".dfd-udrow .dfd-ud").count() == 1
+    # a single-line difference is highlighted word by word in place
+    city = detail.locator("tbody tr", has_text="city").first
+    assert city.locator("mark.dfd-dx").all_inner_texts() == ["Musterstraße", "Musterstr."]
+    detail.scroll_into_view_if_needed()
+    ui.screenshot("diff-detail")
 
 
 def test_flyover_of_a_single_value_and_closing(page: Page) -> None:

@@ -675,6 +675,93 @@ td.num .dfd-v {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- unified text diff (like git diff) ----------
+   Removed lines in the left side's colour, added lines in the right side's;
+   the words that differ within a changed line are tinted more strongly. */
+.dfd-ud {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dfd-ud-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.dfd-ud-body {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--dfd-line);
+  border-radius: 6px;
+  padding: 4px 0;
+  font-family: var(--marimo-monospace-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 18px;
+}
+.dfd-ud-line {
+  display: flex;
+  gap: 6px;
+  padding-right: 8px;
+  min-height: 18px;
+}
+.dfd-ud-line.del {
+  background-color: color-mix(in srgb, var(--side-l) 12%, transparent);
+}
+.dfd-ud-line.add {
+  background-color: color-mix(in srgb, var(--side-r) 12%, transparent);
+}
+.dfd-ud-line.gap {
+  color: var(--dfd-muted);
+  font-style: italic;
+}
+.dfd-ud-sign {
+  flex: none;
+  width: 1ch;
+  font-weight: 700;
+  user-select: none;
+}
+.dfd-ud-line.del .dfd-ud-sign {
+  color: var(--side-l);
+}
+.dfd-ud-line.add .dfd-ud-sign {
+  color: var(--side-r);
+}
+.dfd-ud-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dfd mark.dfd-dx {
+  color: inherit;
+  border-radius: 2px;
+}
+.dfd .del mark.dfd-dx,
+.dfd-detail td:nth-child(2) mark.dfd-dx {
+  background-color: color-mix(in srgb, var(--side-l) 38%, transparent);
+}
+.dfd .add mark.dfd-dx,
+.dfd-detail td:nth-child(3) mark.dfd-dx {
+  background-color: color-mix(in srgb, var(--side-r) 38%, transparent);
+}
+.dfd-detail tr.dfd-udrow > td {
+  white-space: normal;
+  padding-top: 6px;
+  padding-bottom: 8px;
+  background-color: color-mix(in srgb, var(--st-mismatch) 8%, transparent);
+}
+/* the detail panel scrolls itself: no second scroll box inside it */
+.dfd-detail .dfd-ud-body {
+  max-height: none;
+}
+/* the diff row spans the table, but must not widen it */
+.dfd-detail tr.dfd-udrow .dfd-ud {
+  width: 0;
+  min-width: 100%;
+}
+
 /* ---------- footer ---------- */
 .dfd-footer {
   display: flex;

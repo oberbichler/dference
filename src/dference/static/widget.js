@@ -290,6 +290,245 @@ function firstLine(v, showInvisible) {
  */
 const fmtLine = (line, showInvisible) => (showInvisible && line && hasInvisible(line) ? visualize(line) : esc(line));
 
+// ---------------------------------------------------------------- text diff
+// Two differing texts are shown as a unified diff, like `git diff`: lines are
+// matched with Myers' algorithm (git's default), changed lines are paired and
+// the words that differ within them are highlighted.
+
+/** Above this many lines or edits a text is not diffed (the page must stay responsive). */
+const DIFF_MAX_LINES = 2000;
+const DIFF_MAX_EDITS = 500;
+/** Unchanged lines kept around each change; longer runs collapse. */
+const DIFF_CONTEXT = 3;
+
+/**
+ * Edit script between two sequences (Myers' O(ND) algorithm).
+ * @template T
+ * @param {readonly T[]} a
+ * @param {readonly T[]} b
+ * @returns {("="|"-"|"+")[]|null} One op per element of `a` and `b` in order, or
+ *   `null` if the sequences need more than `DIFF_MAX_EDITS` edits.
+ */
+function diffSeq(a, b) {
+  const n = a.length;
+  const m = b.length;
+  const off = n + m + 1;
+  const v = new Int32Array(2 * off + 1);
+  /** `v` at the start of each round, sliced to the diagonals that round can read. */
+  const trace = [];
+  for (let d = 0; d <= Math.min(n + m, DIFF_MAX_EDITS); d++) {
+    trace.push(v.slice(off - d, off + d + 1));
+    for (let k = -d; k <= d; k += 2) {
+      let x = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x++;
+        y++;
+      }
+      v[off + k] = x;
+      if (x >= n && y >= m) return backtrack(trace, n, m);
+    }
+  }
+  return null;
+}
+
+/**
+ * Walk the rounds of `diffSeq` back from the end to the edit script.
+ * @param {Int32Array[]} trace
+ * @param {number} n
+ * @param {number} m
+ * @returns {("="|"-"|"+")[]}
+ */
+function backtrack(trace, n, m) {
+  /** @type {("="|"-"|"+")[]} */
+  const ops = [];
+  let x = n;
+  let y = m;
+  for (let d = trace.length - 1; d > 0; d--) {
+    const snap = trace[d];
+    /** @param {number} k */
+    const V = (k) => snap[k + d];
+    const k = x - y;
+    const prevK = k === -d || (k !== d && V(k - 1) < V(k + 1)) ? k + 1 : k - 1;
+    const prevX = V(prevK);
+    const prevY = prevX - prevK;
+    while (x > prevX && y > prevY) {
+      ops.push("=");
+      x--;
+      y--;
+    }
+    ops.push(prevK === k + 1 ? "+" : "-");
+    x = prevX;
+    y = prevY;
+  }
+  while (x-- > 0) ops.push("=");
+  return ops.reverse();
+}
+
+const LINE_RE = /[^\r\n\u2028\u2029]*(?:\r\n|[\n\r\u2028\u2029])|[^\r\n\u2028\u2029]+$/g;
+/**
+ * Lines of a text, each with its line break: texts that differ only in their
+ * line breaks (`\r\n` vs `\n`) differ in the diff too.
+ * @param {string} s
+ */
+const splitLines = (s) => s.match(LINE_RE) ?? [];
+/** Words, runs of whitespace and single other characters. */
+const TOKEN_RE = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
+
+/**
+ * Which code points of `a` and `b` belong to words that differ, and how
+ * similar the two are (share of characters in common words, 0–1).
+ * @param {string} a
+ * @param {string} b
+ * @returns {{marks: [boolean[], boolean[]], score: number}|null} `null` if the
+ *   two have no word in common.
+ */
+function wordDiff(a, b) {
+  const ta = a.match(TOKEN_RE) ?? [];
+  const tb = b.match(TOKEN_RE) ?? [];
+  const ops = diffSeq(ta, tb);
+  if (!ops) return null;
+  /** @type {boolean[]} */
+  const fa = [];
+  /** @type {boolean[]} */
+  const fb = [];
+  let i = 0;
+  let j = 0;
+  let same = 0;
+  for (const op of ops) {
+    if (op !== "+") {
+      const len = Array.from(ta[i++]).length;
+      fa.push(...new Array(len).fill(op === "-"));
+      if (op === "=" && /[\p{L}\p{N}]/u.test(ta[i - 1])) same += len;
+    }
+    if (op !== "-") {
+      const len = Array.from(tb[j++]).length;
+      fb.push(...new Array(len).fill(op === "+"));
+    }
+  }
+  const score = same / Math.max(fa.length, fb.length, 1);
+  return same ? { marks: [fa, fb], score } : null;
+}
+
+/**
+ * HTML of one line of a diff: invisible characters as markers (when shown, the
+ * line break too), code points flagged in `marked` highlighted.
+ * @param {string} line Text of the line, including its line break.
+ * @param {boolean[]|null} marked
+ * @param {boolean} showInvisible
+ */
+function diffLineHtml(line, marked, showInvisible) {
+  const chars = Array.from(line);
+  let end = chars.length;
+  while (end > 0 && /[\n\r\u2028\u2029]/.test(chars[end - 1])) end--;
+  const spaces = markedSpaces(chars.slice(0, end));
+  const parts = chars.map((c, i) => {
+    if (i >= end) return showInvisible ? invMark(c) : "";
+    if (!showInvisible) return esc(c);
+    if (c === " ") return spaces[i] ? '<span class="dfd-inv" title="U+0020 space">␣</span>' : " ";
+    return INV_RE.test(c) ? invMark(c) : esc(c);
+  });
+  let html = "";
+  for (let i = 0; i < parts.length; ) {
+    const on = !!marked?.[i];
+    let j = i;
+    while (j < parts.length && !!marked?.[j] === on) j++;
+    const run = parts.slice(i, j).join("");
+    html += on ? `<mark class="dfd-dx">${run}</mark>` : run;
+    i = j;
+  }
+  return html;
+}
+
+/**
+ * One line of a unified diff.
+ * @typedef {object} DiffLine
+ * @property {"="|"-"|"+"|"…"} op Unchanged, only left, only right, or collapsed lines.
+ * @property {string} text
+ * @property {number} a Line number on the left (0 if none).
+ * @property {number} b Line number on the right (0 if none).
+ * @property {boolean[]|null} marked Code points of `text` that differ.
+ * @property {number} [hidden] Number of lines a collapsed line stands for.
+ */
+
+/**
+ * Unified diff of two texts, or `null` if they are too large to diff.
+ * @param {string} a
+ * @param {string} b
+ * @returns {DiffLine[]|null}
+ */
+function unifiedDiff(a, b) {
+  const la = splitLines(a);
+  const lb = splitLines(b);
+  if (la.length > DIFF_MAX_LINES || lb.length > DIFF_MAX_LINES) return null;
+  const ops = diffSeq(la, lb);
+  if (!ops) return null;
+  /** @type {DiffLine[]} */
+  const out = [];
+  let i = 0;
+  let j = 0;
+  for (let p = 0; p < ops.length; ) {
+    if (ops[p] === "=") {
+      out.push({ op: "=", text: la[i], a: ++i, b: ++j, marked: null });
+      p++;
+      continue;
+    }
+    // a block of changes: removed lines first, then added ones (like git); for
+    // the word diff each removed line is paired with the most similar added
+    // line after the previous pair
+    /** @type {DiffLine[]} */
+    const del = [];
+    /** @type {DiffLine[]} */
+    const add = [];
+    for (; p < ops.length && ops[p] !== "="; p++) {
+      if (ops[p] === "-") del.push({ op: "-", text: la[i], a: ++i, b: 0, marked: null });
+      else add.push({ op: "+", text: lb[j], a: 0, b: ++j, marked: null });
+    }
+    let next = 0;
+    for (const d of del) {
+      /** @type {{k: number, w: NonNullable<ReturnType<typeof wordDiff>>}|null} */
+      let best = null;
+      for (let k = next; k < add.length; k++) {
+        const w = wordDiff(d.text, add[k].text);
+        if (w && w.score >= 0.3 && (!best || w.score > best.w.score)) best = { k, w };
+      }
+      if (best) {
+        [d.marked, add[best.k].marked] = best.w.marks;
+        next = best.k + 1;
+      }
+    }
+    out.push(...del, ...add);
+  }
+  return collapse(out);
+}
+
+/**
+ * Collapse runs of unchanged lines to `DIFF_CONTEXT` lines around each change.
+ * @param {DiffLine[]} lines
+ * @returns {DiffLine[]}
+ */
+function collapse(lines) {
+  /** @type {DiffLine[]} */
+  const out = [];
+  for (let i = 0; i < lines.length; ) {
+    if (lines[i].op !== "=") {
+      out.push(lines[i++]);
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && lines[j].op === "=") j++;
+    const keepHead = i === 0 ? 0 : DIFF_CONTEXT;
+    const keepTail = j === lines.length ? 0 : DIFF_CONTEXT;
+    if (j - i > keepHead + keepTail + 1) {
+      out.push(...lines.slice(i, i + keepHead));
+      out.push({ op: "…", text: "", a: 0, b: 0, marked: null, hidden: j - i - keepHead - keepTail });
+      out.push(...lines.slice(j - keepTail, j));
+    } else out.push(...lines.slice(i, j));
+    i = j;
+  }
+  return out;
+}
+
 // ------------------------------------------------------------ column filters
 
 /**
@@ -432,6 +671,29 @@ function render({ model, el }) {
       : `<span class="dfd-side r" title="${esc(M.R)} (right)">${esc(M.RS)}</span>`;
   /** @param {Value|undefined} v */
   const F = (v) => fmt(v, state.showInvisible);
+  /**
+   * Unified diff of two strings as HTML, `null` if they are too large to diff.
+   * Removed lines carry the left side's colour, added lines the right side's.
+   * @param {string} a Left value.
+   * @param {string} b Right value.
+   */
+  function diffHtml(a, b) {
+    const lines = unifiedDiff(a, b);
+    if (!lines) return null;
+    const sign = { "=": " ", "-": "−", "+": "+", "…": "" };
+    const cls = { "=": "ctx", "-": "del", "+": "add", "…": "gap" };
+    const body = lines
+      .map((d) =>
+        d.op === "…"
+          ? `<div class="dfd-ud-line gap"><span class="dfd-ln"></span><span class="dfd-ln"></span><span class="dfd-ud-sign"></span><span class="dfd-ud-text">⋯ ${n(d.hidden ?? 0)} unchanged line${d.hidden === 1 ? "" : "s"}</span></div>`
+          : `<div class="dfd-ud-line ${cls[d.op]}"><span class="dfd-ln">${d.a || ""}</span><span class="dfd-ln">${d.b || ""}</span><span class="dfd-ud-sign">${sign[d.op]}</span><span class="dfd-ud-text">${diffLineHtml(d.text, d.marked, state.showInvisible)}</span></div>`,
+      )
+      .join("");
+    return `<div class="dfd-ud">
+      <div class="dfd-ud-legend"><span class="dfd-sidename del">− ${chip("l")}${esc(M.L)}</span><span class="dfd-sidename add">+ ${chip("r")}${esc(M.R)}</span></div>
+      <div class="dfd-ud-body">${body}</div></div>`;
+  }
+
   /**
    * Like `F`, but a multi-line string shows its first line only, with a button
    * that opens the whole text: every row of the table stays one line high.
@@ -956,9 +1218,28 @@ function render({ model, el }) {
               : c.kind === "compared" && row.l && row.r
                 ? "="
                 : "";
+        let [lh, rh] = [show(lv), show(rv)];
+        let below = "";
+        if (isDiff && typeof lv === "string" && typeof rv === "string" && lv && rv) {
+          if (linesOf(lv) || linesOf(rv)) {
+            // texts: first lines here, the unified diff in a row of its own below
+            const ud = diffHtml(lv, rv);
+            if (ud) {
+              /** @param {string} v */
+              const first = (v) =>
+                linesOf(v) ? `${firstLine(v, state.showInvisible)} <span class="dfd-muted">⋯</span>` : F(v);
+              [lh, rh] = [first(lv), first(rv)];
+              below = `<tr class="dfd-udrow"><td colspan="4">${ud}</td></tr>`;
+            }
+          } else {
+            const w = wordDiff(lv, rv)?.marks;
+            if (w)
+              [lh, rh] = [diffLineHtml(lv, w[0], state.showInvisible), diffLineHtml(rv, w[1], state.showInvisible)];
+          }
+        }
         return `<tr class="${isDiff ? "diff" : ""}"><th>${esc(c.name)}</th>
-        <td class="${c.numeric ? "num" : ""}">${show(lv)}</td><td class="${c.numeric ? "num" : ""}">${show(rv)}</td>
-        <td class="mark">${mark}</td></tr>`;
+        <td class="${c.numeric ? "num" : ""}">${lh}</td><td class="${c.numeric ? "num" : ""}">${rh}</td>
+        <td class="mark">${mark}</td></tr>${below}`;
       })
       .join("");
     wrap.innerHTML = `
@@ -1046,19 +1327,23 @@ function render({ model, el }) {
         .join("");
       return `<div class="dfd-fly-text">${html}</div>`;
     };
-    const body = sides
-      .map(
-        ([side, v], k) => `<section>
+    const [lv, rv] = [row.l?.[col], row.r?.[col]];
+    const unified = both && typeof lv === "string" && typeof rv === "string" ? diffHtml(lv, rv) : null;
+    const body =
+      unified ??
+      sides
+        .map(
+          ([side, v], k) => `<section>
           ${side ? `<div class="dfd-fly-head dfd-sidename">${chip(side)}${esc(side === "l" ? M.L : M.R)}</div>` : ""}
           ${text(v, k)}</section>`,
-      )
-      .join("");
+        )
+        .join("");
     wrap.innerHTML = `
-      <div class="dfd-flyover ${both ? "two" : ""}" role="dialog" aria-label="Full text of ${esc(c.name)}">
+      <div class="dfd-flyover ${both ? "two" : ""}" role="dialog" aria-label="${unified ? "Differences" : "Full text"} of ${esc(c.name)}">
         <div class="dfd-cm-title"><b>${esc(c.name)}</b><span class="dfd-dtype">${esc(c.dtype)}</span>
           <span class="dfd-spacer"></span>
           <button class="dfd-close" data-act="close-flyover" aria-label="Close">×</button></div>
-        <div class="dfd-fly-sides">${body}</div>
+        ${unified ? body : `<div class="dfd-fly-sides">${body}</div>`}
       </div>`;
     const box = /** @type {HTMLElement} */ (wrap.firstElementChild);
     const btn = root.querySelector(`.dfd-scroll [data-more="${row.id}:${col}"]`);
