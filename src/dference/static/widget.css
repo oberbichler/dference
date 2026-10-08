@@ -197,6 +197,23 @@
   opacity: 0.75;
   flex: none;
 }
+/* one chip per side the key repeats on, like the side chips of the values */
+.dfd-dup.l,
+.dfd-dup.r {
+  height: 15px;
+  min-width: 28px;
+  border: 0;
+  background: var(--side);
+  color: #fff;
+  font-size: 9px;
+  opacity: 1;
+}
+.dfd-dup.l {
+  --side: var(--side-l);
+}
+.dfd-dup.r {
+  --side: var(--side-r);
+}
 .dfd-dup.empty {
   visibility: hidden;
 }

@@ -765,12 +765,20 @@ def test_duplicate_keys_notice_chip_and_filter(page: Page) -> None:
     assert "1 key occurs more than once in CRM, 2 keys occur more than once in ERP" in " ".join(
         notice.inner_text().split()
     )
-    # every row of a key that is not unique carries the chip with its larger count
+    # a chip per side on which the key repeats, with that side's count
     chips = ui.page.eval_on_selector_all(
         ".dfd-scroll tbody tr[data-id]",
-        "trs => trs.map(tr => tr.querySelector('.dfd-dup')?.textContent ?? '')",
+        """trs => trs.map(tr => [...tr.querySelectorAll('.dfd-dup:not(.empty)')]
+            .map(c => c.textContent).join(' '))""",
     )
-    assert sorted(chips) == ["", "", "×2", "×2", "×3", "×3", "×3"]
+    # id 1: 3x in CRM, 2x in ERP; id 2: once in CRM, 2x in ERP; ids 3, 4: unique
+    assert sorted(chips) == ["", "", "C×3 E×2", "C×3 E×2", "C×3 E×2", "E×2", "E×2"]
+    # rows without a chip keep its room, so the badges stay in line
+    lefts = ui.page.eval_on_selector_all(
+        ".dfd-scroll tbody tr[data-id] .dfd-badge",
+        "bs => bs.map(b => b.getBoundingClientRect().left)",
+    )
+    assert len(set(lefts)) == 1
     assert ui.footer() == "1–7 of 7"
     ui.screenshot("duplicates")
 
@@ -793,6 +801,7 @@ def test_duplicate_keys_notice_chip_and_filter(page: Page) -> None:
     assert (
         "Key occurs 3× in CRM and 2× in ERP" in ui.page.locator(".dfd-detail header").inner_text()
     )
+    ui.screenshot("duplicates-detail")
 
 
 def test_unique_keys_show_no_notice(ui: Harness) -> None:

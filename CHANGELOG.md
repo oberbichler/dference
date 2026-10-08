@@ -14,8 +14,9 @@ All notable changes to this project are documented here. The format follows
   `order_by`), or refused as before (`duplicates="raise"`). Surplus rows of a
   key count as only in that side. `DiffResult.duplicates`,
   `DiffResult.duplicate_rows` and the new `Summary` fields describe them. The
-  widget shows a notice, a `×N` chip on the affected rows and a "Duplicate
-  keys only" filter in the status column menu.
+  widget shows a notice, a chip per side on which a key repeats (in that
+  side's colour, e.g. `C×3 E×2`, or only `E×2` if the key repeats on the right
+  only) and a "Duplicate keys only" filter in the status column menu.
 
 - Differing texts are compared like `git diff`: the detail view and the
   flyover show a unified diff (lines matched with Myers' algorithm, removed

@@ -677,18 +677,25 @@ function render({ model, el }) {
    */
   const dupText = ([l, r]) => `Key occurs ${n(l)}× in ${M.L} and ${n(r)}× in ${M.R}`;
   /**
-   * Chip for a row whose key is not unique: the larger count, e.g. `×3`.
+   * Chips of a row whose key is not unique: one per side on which the key
+   * occurs more than once, in that side's colour, e.g. `C×3 E×2` or just `E×2`.
    * @param {Row} row
+   * @param {boolean} [slots] Keep the room of a missing chip free (for the
+   *   sides that have duplicates anywhere), so all badges stay in line.
    */
-  const dupChip = (row) =>
-    row.k ? `<span class="dfd-dup" title="${esc(dupText(row.k))}">×${n(Math.max(...row.k))}</span>` : "";
-  /**
-   * Chip in the status column; rows with a unique key keep its room free, so
-   * all badges stay in line.
-   * @param {Row} row
-   */
-  const dupSlot = (row) =>
-    row.k ? dupChip(row) : M.summary.duplicate_rows ? '<span class="dfd-dup empty" aria-hidden="true"></span>' : "";
+  function dupChips(row, slots = false) {
+    const S = M.summary;
+    /** @param {0|1} i */
+    const one = (i) => {
+      const count = row.k?.[i] ?? 0;
+      const [side, short] = i === 0 ? ["l", M.LS] : ["r", M.RS];
+      if (count > 1)
+        return `<span class="dfd-dup ${side}" title="${esc(dupText(/** @type {[number, number]} */ (row.k)))}">${esc(short)}×${n(count)}</span>`;
+      const room = i === 0 ? S.duplicate_keys_left : S.duplicate_keys_right;
+      return slots && room ? `<span class="dfd-dup ${side} empty" aria-hidden="true">${esc(short)}×0</span>` : "";
+    };
+    return one(0) + one(1);
+  }
   /**
    * Chip of a side: its short name on the side colour.
    * @param {"l"|"r"} side
@@ -1178,7 +1185,7 @@ function render({ model, el }) {
           (r) => `
         <tr data-id="${r.id}" class="st-${r.s} ${selected.has(r.id) ? "sel" : ""} ${activeId === r.id ? "active" : ""}">
           <td class="cb"><input type="checkbox" data-sel="${r.id}" ${selected.has(r.id) ? "checked" : ""} aria-label="Select row"></td>
-          <td class="status" title="${esc(`${label(r.s)}: ${hint(r.s)}`)}"><span class="dfd-sr">${esc(label(r.s))}</span><span class="dfd-st">${badge(r.s)}${dupSlot(r)}</span></td>
+          <td class="status" title="${esc(`${label(r.s)}: ${hint(r.s)}`)}"><span class="dfd-sr">${esc(label(r.s))}</span><span class="dfd-st">${badge(r.s)}${dupChips(r, true)}</span></td>
           ${cols.map((i) => td(r, i)).join("")}
         </tr>`,
         )
@@ -1311,7 +1318,7 @@ function render({ model, el }) {
       <section class="dfd-detail st-${row.s}" aria-label="Row details">
         <header>
           <span class="dfd-pill">${badge(row.s)}${esc(label(row.s))}</span>
-          ${row.k ? `<span class="dfd-pill">${dupChip(row)}${esc(dupText(row.k))}</span>` : ""}
+          ${row.k ? `<span class="dfd-pill">${dupChips(row)}${esc(dupText(row.k))}</span>` : ""}
           <span class="dfd-detail-key">${key}</span>
           <span class="dfd-spacer"></span>
           <span class="dfd-pager">
