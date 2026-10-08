@@ -42,6 +42,7 @@ TRAITS = (
     "left_short",
     "right_short",
     "page_size",
+    "text_diff",
     "selected_ids",
 )
 

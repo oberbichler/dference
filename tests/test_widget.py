@@ -144,3 +144,10 @@ def test_widget_passes_strict_on(left: pl.DataFrame, right: pl.DataFrame) -> Non
 
 def test_default_page_size(left: pl.DataFrame, right: pl.DataFrame) -> None:
     assert DataFrameDiff(left, right, key="id").page_size == 10
+
+
+def test_text_diff_default_and_option(left: pl.DataFrame, right: pl.DataFrame) -> None:
+    assert DataFrameDiff(left, right, key="id").text_diff is True
+    assert DataFrameDiff(left, right, key="id", text_diff=False).text_diff is False
+    result = compare(left, right, key="id")
+    assert DataFrameDiff.from_result(result, text_diff=False).text_diff is False

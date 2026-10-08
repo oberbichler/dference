@@ -147,7 +147,7 @@ result.column_stats()  # per column: dtypes, mismatches, equal/mismatch share
 | `DiffResult.frame(status=None, *, rows=None)` | Wide result, optionally filtered by status or row ids. |
 | `DiffResult.mismatches()` | Long format of all differing cells (values as text). |
 | `DiffResult.column_stats()` | Match rates per compared column. |
-| `DataFrameDiff(left, right, key, ...)` | The widget; same arguments as `compare` plus `left_short`, `right_short`, `page_size` (default 10). |
+| `DataFrameDiff(left, right, key, ...)` | The widget; same arguments as `compare` plus `left_short`, `right_short`, `page_size` (default 10), `text_diff` (default `True`: differing texts as a unified diff like `git diff`). |
 | `DataFrameDiff.from_result(result, ...)` | Widget for an existing `DiffResult`. |
 | `DataFrameDiff.result` | The underlying `DiffResult`. |
 | `DataFrameDiff.selected_ids` | Synced trait with the checked row ids. |

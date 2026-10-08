@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Differing texts are compared like `git diff`: the detail view and the
+  flyover show a unified diff (lines matched with Myers' algorithm, removed
+  lines in the left side's colour, added lines in the right side's, long
+  unchanged stretches collapsed), with the words that differ within a line
+  highlighted. Single-line differences in the detail view are highlighted word
+  by word in place.
+  The toolbar toggle *Text diff* turns it off (both sides next to each other
+  instead); `DataFrameDiff(..., text_diff=False)` and
+  `DataFrameDiff.from_result(..., text_diff=False)` set its initial state.
+
 ## [0.2.0] - 2026-10-07
 
 ### Changed
