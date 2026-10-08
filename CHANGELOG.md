@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-08
+
 ### Added
 
 - Keys no longer need to be unique. Rows that share a key are paired by
@@ -17,7 +19,6 @@ All notable changes to this project are documented here. The format follows
   widget shows a notice, a chip per side on which a key repeats (in that
   side's colour, e.g. `C×3 E×2`, or only `E×2` if the key repeats on the right
   only) and a "Duplicate keys only" filter in the status column menu.
-
 - Differing texts are compared like `git diff`: the detail view and the
   flyover show a unified diff (lines matched with Myers' algorithm, removed
   lines in the left side's colour, added lines in the right side's, long
@@ -27,6 +28,11 @@ All notable changes to this project are documented here. The format follows
   The toolbar toggle *Text diff* turns it off (both sides next to each other
   instead); `DataFrameDiff(..., text_diff=False)` and
   `DataFrameDiff.from_result(..., text_diff=False)` set its initial state.
+
+### Changed
+
+- Duplicate keys no longer raise by default; pass `duplicates="raise"` for the
+  previous behaviour.
 
 ## [0.2.0] - 2026-10-07
 
@@ -88,6 +94,7 @@ First release.
   version comes from the git tag (hatch-vcs), so nothing needs to be bumped.
 - ISC license.
 
-[Unreleased]: https://github.com/oberbichler/dference/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/oberbichler/dference/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/oberbichler/dference/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/oberbichler/dference/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/oberbichler/dference/releases/tag/v0.1.0
