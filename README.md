@@ -111,7 +111,15 @@ result.column_stats()  # per column: dtypes, mismatches, equal/mismatch share
   (keys included) with a cast to fix it, e.g.
   `right = right.with_columns(pl.col("qty").cast(pl.Int64))`. Note that pandas
   has no date dtype – a `Date` column from pandas arrives as a `Datetime`.
-- **Keys** must be unique on each side; null keys match null keys.
+- **Keys** should be unique on each side; null keys match null keys. If a key
+  occurs more than once, rows with that key are paired by content
+  (`duplicates="match"`, the default): identical rows first, then the most
+  similar ones, whatever their order. `duplicates="number"` pairs them by
+  position instead (optionally sorted by `order_by`), `duplicates="raise"`
+  refuses such keys. Rows left over because a key occurs more often on one side
+  count as only in that side. The widget shows a notice, a chip per side on which
+  the key repeats (e.g. `C×3 E×2`) and a "Duplicate keys only" filter in the status column;
+  `result.duplicates` lists the keys with their count per side.
 - **Columns present on one side only** are shown but not compared. Use
   `ignore_columns=[...]` to leave columns out entirely.
 

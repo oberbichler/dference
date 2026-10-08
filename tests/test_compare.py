@@ -252,9 +252,74 @@ def test_invalid_keys(
         compare(left, right, key)
 
 
-def test_duplicate_keys_raise(left: pl.DataFrame, right: pl.DataFrame) -> None:
+def test_duplicate_keys_raise_on_request(left: pl.DataFrame, right: pl.DataFrame) -> None:
     with pytest.raises(ValueError, match=r"right: 2 rows share a key"):
-        compare(left, pl.concat([right, right.head(1)]), "id")
+        compare(left, pl.concat([right, right.head(1)]), "id", duplicates="raise")
+
+
+def test_unknown_duplicates_mode_raises(left: pl.DataFrame, right: pl.DataFrame) -> None:
+    with pytest.raises(ValueError, match="duplicates must be"):
+        compare(left, right, "id", duplicates="ignore")  # ty: ignore[invalid-argument-type]
+
+
+def test_unique_keys_have_no_duplicates(left: pl.DataFrame, right: pl.DataFrame) -> None:
+    result = compare(left, right, "id")
+    assert not result.has_duplicates
+    assert result.duplicates.is_empty()
+    assert result.duplicate_rows == 0
+    assert result.summary.duplicate_keys_left == result.summary.duplicate_keys_right == 0
+
+
+DUP_LEFT = pl.DataFrame({"id": [1, 1, 1, 2, 3], "v": ["a", "b", "c", "x", "y"]})
+DUP_RIGHT = pl.DataFrame({"id": [1, 1, 2, 2, 3], "v": ["c", "a", "x", "z", "y"]})
+
+
+def test_duplicates_are_matched_by_content() -> None:
+    result = compare(DUP_LEFT, DUP_RIGHT, "id")
+    rows = result.frame().sort("id", "v [left]", nulls_last=True)
+    # identical rows pair up regardless of their order; the surplus is one-sided
+    assert rows.select("id", "status", "v [left]", "v [right]").rows() == [
+        (1, "equal", "a", "a"),
+        (1, "missing_right", "b", None),
+        (1, "equal", "c", "c"),
+        (2, "equal", "x", "x"),
+        (2, "missing_left", None, "z"),
+        (3, "equal", "y", "y"),
+    ]
+    s = result.summary
+    assert (s.duplicate_keys_left, s.duplicate_keys_right, s.duplicates) == (1, 2, "match")
+    assert result.duplicates.rows() == [(1, 3, 2), (2, 1, 2)]
+    assert result.duplicate_rows == 5
+
+
+def test_duplicates_pair_the_most_similar_rows() -> None:
+    left = pl.DataFrame({"id": [1, 1], "a": ["x", "y"], "b": [1, 2]})
+    right = pl.DataFrame({"id": [1, 1], "a": ["y", "x"], "b": [20, 1]})
+    rows = compare(left, right, "id").frame().sort("a [left]")
+    # (x, 1) matches (x, 1) exactly, so (y, 2) is left for (y, 20): one difference
+    assert rows.select("status", "a [right]", "b [right]").rows() == [
+        ("equal", "x", 1),
+        ("mismatch", "y", 20),
+    ]
+
+
+def test_duplicates_numbered_by_position_and_order_by() -> None:
+    left = pl.DataFrame({"id": [1, 1], "t": [2, 1], "v": ["b", "a"]})
+    right = pl.DataFrame({"id": [1, 1], "t": [1, 2], "v": ["a", "b"]})
+    by_position = compare(left, right, "id", duplicates="number")
+    assert by_position.summary.mismatch == 2
+    assert by_position.summary.duplicates == "number"
+    by_time = compare(left, right, "id", duplicates="number", order_by="t")
+    assert by_time.summary.equal == 2
+    with pytest.raises(ValueError, match="order_by column"):
+        compare(left, right, "id", duplicates="number", order_by="missing")
+
+
+def test_duplicate_null_keys_pair_with_each_other() -> None:
+    left = pl.DataFrame({"id": [None, None], "v": [1, 2]}, schema={"id": pl.Int64, "v": pl.Int64})
+    right = pl.DataFrame({"id": [None], "v": [2]}, schema={"id": pl.Int64, "v": pl.Int64})
+    result = compare(left, right, "id")
+    assert sorted(result.frame().get_column("status").to_list()) == ["equal", "missing_right"]
 
 
 def test_text_vs_number_key_raises() -> None:
@@ -349,3 +414,23 @@ def test_common_dtype_refuses_lossy_or_different_types(a: pl.DataType, b: pl.Dat
 
 def test_repr(left: pl.DataFrame, right: pl.DataFrame) -> None:
     assert "mismatch=2" in repr(compare(left, right, "id"))
+
+
+def test_large_duplicate_groups_still_pair_identical_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dference._compare as engine
+
+    # a group too large to compare every pair: identical rows still pair up,
+    # the rest is paired by position
+    monkeypatch.setattr(engine, "_MAX_GROUP_CANDIDATES", 4)
+    left = pl.DataFrame({"id": [1] * 6, "v": [0, 1, 2, 3, 4, 5]})
+    right = pl.DataFrame({"id": [1] * 6, "v": [5, 4, 3, 2, 10, 11]})
+    result = compare(left, right, "id")
+    assert result.summary.equal == 4
+    assert result.summary.mismatch == 2
+    assert result.summary.missing_left == result.summary.missing_right == 0
+
+
+def test_one_key_repeated_many_times() -> None:
+    left = pl.DataFrame({"id": [7] * 3000, "v": list(range(3000))})
+    right = left.reverse()
+    assert compare(left, right, "id").summary.equal == 3000

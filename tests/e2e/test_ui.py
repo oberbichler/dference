@@ -742,3 +742,79 @@ def test_text_diff_off_from_python(page: Page) -> None:
     ui.set_trait("text_diff", True)
     assert ui.page.locator('[data-act="text-diff"]').is_checked()
     assert detail.locator(".dfd-ud").count() == 1
+
+
+# ---- keys that are not unique ---------------------------------------------------------
+
+
+def duplicate_ui(page: Page) -> Harness:
+    left = pl.DataFrame(
+        {"id": [1, 1, 1, 2, 3, 4], "city": ["Berlin", "Bonn", "Ulm", "Kiel", "Jena", "Köln"]}
+    )
+    right = pl.DataFrame(
+        {"id": [1, 1, 2, 2, 3, 4], "city": ["Ulm", "Berlin", "Kiel", "Kiel", "Jena", "Koeln"]}
+    )
+    return Harness(
+        page, DataFrameDiff(left, right, key="id", left_name="CRM", right_name="ERP")
+    ).mount()
+
+
+def test_duplicate_keys_notice_chip_and_filter(page: Page) -> None:
+    ui = duplicate_ui(page)
+    notice = ui.page.locator(".dfd-notice")
+    assert "1 key occurs more than once in CRM, 2 keys occur more than once in ERP" in " ".join(
+        notice.inner_text().split()
+    )
+    # a chip per side on which the key repeats, with that side's count
+    chips = ui.page.eval_on_selector_all(
+        ".dfd-scroll tbody tr[data-id]",
+        """trs => trs.map(tr => [...tr.querySelectorAll('.dfd-dup:not(.empty)')]
+            .map(c => c.textContent).join(' '))""",
+    )
+    # id 1: 3x in CRM, 2x in ERP; id 2: once in CRM, 2x in ERP; ids 3, 4: unique
+    assert sorted(chips) == ["", "", "C×3 E×2", "C×3 E×2", "C×3 E×2", "E×2", "E×2"]
+    # rows without a chip keep its room, so the badges stay in line
+    lefts = ui.page.eval_on_selector_all(
+        ".dfd-scroll tbody tr[data-id] .dfd-badge",
+        "bs => bs.map(b => b.getBoundingClientRect().left)",
+    )
+    assert len(set(lefts)) == 1
+    # all chips in the status column are as high as the badge, the side chips as wide
+    sizes = ui.page.eval_on_selector_all(
+        ".dfd-scroll tbody .dfd-st > *",
+        """els => els.map(e => {
+            const box = e.getBoundingClientRect();
+            return [e.className, box.width, box.height];
+        })""",
+    )
+    assert {h for _, _, h in sizes} == {18}
+    assert len({w for cls, w, _ in sizes if "dfd-dup" in cls}) == 1
+    assert ui.footer() == "1–7 of 7"
+    ui.screenshot("duplicates")
+
+    # the status menu filters to these rows
+    ui.click('.dfd-scroll [data-colmenu="status"]')
+    ui.page.check(".dfd-colmenu [data-dup-only]")
+    ui.settle()
+    assert ui.footer() == "1–5 of 5 (filtered from 7)"
+    assert "Duplicate keys" in toolbar(ui)
+    ui.page.keyboard.press("Escape")
+    ui.click('[data-act="clear-dup"]')
+    assert ui.footer() == "1–7 of 7"
+
+    # ... and so does the notice
+    ui.click('[data-act="dup-only"]')
+    assert ui.footer() == "1–5 of 5 (filtered from 7)"
+
+    # the detail view names the counts
+    ui.click(".dfd-scroll tbody tr[data-id] td.status")
+    assert (
+        "Key occurs 3× in CRM and 2× in ERP" in ui.page.locator(".dfd-detail header").inner_text()
+    )
+    ui.screenshot("duplicates-detail")
+
+
+def test_unique_keys_show_no_notice(ui: Harness) -> None:
+    assert ui.page.locator(".dfd-notice").count() == 0
+    status_menu(ui)
+    assert ui.page.locator("[data-dup-only]").count() == 0

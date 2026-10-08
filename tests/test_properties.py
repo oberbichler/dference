@@ -267,3 +267,57 @@ def test_page_size_is_at_least_one(size: int) -> None:
     result = compare(pl.DataFrame({"id": [1, 2]}), pl.DataFrame({"id": [1, 2]}), "id")
     page = ViewEngine(result).page(Query(), 0, size)
     assert page["page_size"] >= 1
+
+
+@st.composite
+def duplicate_pair(draw: st.DrawFn) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Two frames whose keys repeat (few keys, few values)."""
+
+    def side() -> pl.DataFrame:
+        n = draw(st.integers(0, 12))
+        return pl.DataFrame(
+            {
+                "id": draw(
+                    st.lists(st.one_of(st.none(), st.integers(0, 3)), min_size=n, max_size=n)
+                ),
+                "v": draw(
+                    st.lists(st.one_of(st.none(), st.integers(0, 2)), min_size=n, max_size=n)
+                ),
+            },
+            schema={"id": pl.Int64, "v": pl.Int64},
+        )
+
+    return side(), side()
+
+
+@SETTINGS
+@given(duplicate_pair(), st.sampled_from(["match", "number"]))
+def test_duplicates_keep_every_row_once(
+    frames: tuple[pl.DataFrame, pl.DataFrame], mode: str
+) -> None:
+    left, right = frames
+    result = compare(left, right, "id", duplicates=mode)  # ty: ignore[invalid-argument-type]
+    s = result.summary
+    # every input row ends up in exactly one result row
+    assert s.equal + s.mismatch + s.missing_right == left.height
+    assert s.equal + s.mismatch + s.missing_left == right.height
+
+
+@SETTINGS
+@given(duplicate_pair())
+def test_matching_finds_at_least_as_many_equal_rows_as_numbering(
+    frames: tuple[pl.DataFrame, pl.DataFrame],
+) -> None:
+    left, right = frames
+    matched = compare(left, right, "id").summary.equal
+    numbered = compare(left, right, "id", duplicates="number").summary.equal
+    # identical rows are paired first, so no ordering can find more of them
+    assert matched >= numbered
+    # and exactly as many as the multiset of (id, v) rows has in common
+    common = (
+        left.group_by("id", "v").len("l")
+        .join(right.group_by("id", "v").len("r"), on=["id", "v"], nulls_equal=True)
+        .select(pl.min_horizontal("l", "r").sum())
+        .item()
+    )  # fmt: skip
+    assert matched == (common or 0)

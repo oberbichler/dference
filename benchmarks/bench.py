@@ -68,6 +68,20 @@ def main(n: int) -> None:
     timed("first page, sort by revenue desc", lambda: engine.page(q_sort, 0, 25))
     timed("mismatches() long format", result.mismatches)
 
+    # keys that are not unique: every 10th key occurs three times on both sides,
+    # in a different order on the right
+    copies = pl.col("id") % 10 == 0
+    dup_left = pl.concat([left, left.filter(copies), left.filter(copies)])
+    dup_right = pl.concat([right, right.filter(copies), right.filter(copies)]).reverse()
+    for mode in ("match", "number"):
+        dup = timed(
+            f"compare, 10% keys x3, duplicates={mode!r}",
+            lambda mode=mode: compare(dup_left, dup_right, "id", duplicates=mode),
+        )
+        print(f"  {dup!r}")
+    q_dup = Query(duplicates_only=True)
+    timed("first page, duplicate keys only", lambda: ViewEngine(dup).page(q_dup, 0, 25))
+
 
 if __name__ == "__main__":
     main(int(sys.argv[1].replace("_", "")) if len(sys.argv) > 1 else 1_000_000)

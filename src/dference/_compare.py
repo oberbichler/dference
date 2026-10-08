@@ -13,6 +13,8 @@ The joined frame (``DiffResult.data``) uses reserved internal column names:
 * ``__fd_r:<col>``      - value from the right frame
 * ``__fd_d:<col>``      - ``True`` where the compared column differs
 * ``<key>``             - key columns, coalesced from both sides
+* ``__fd_nl``/``__fd_nr`` - how often the row's key occurs on the left/right
+  (only present if a key is not unique on one side)
 """
 
 from __future__ import annotations
@@ -40,6 +42,25 @@ ROW = f"{_PREFIX}row"
 STATUS = f"{_PREFIX}status"
 _IN_LEFT = f"{_PREFIX}in_l"
 _IN_RIGHT = f"{_PREFIX}in_r"
+_OCC = f"{_PREFIX}occ"
+COUNT_LEFT = f"{_PREFIX}nl"
+COUNT_RIGHT = f"{_PREFIX}nr"
+
+#: How rows that share a key are paired (see :func:`compare`).
+Duplicates = Literal["match", "number", "raise"]
+#: Rows sharing a key that are not identical are paired by similarity, comparing
+#: every left row with every right row of the key - up to this many pairs per
+#: key and in total; beyond that they are paired by position.
+_MAX_GROUP_CANDIDATES = 10_000
+_MAX_CANDIDATES = 1_000_000
+
+
+def duplicate_key() -> pl.Expr:
+    """``True`` for rows whose key occurs more than once on a side.
+
+    Only valid on ``DiffResult.data`` of a result with duplicates.
+    """
+    return (pl.col(COUNT_LEFT) > 1) | (pl.col(COUNT_RIGHT) > 1)
 
 
 def lcol(name: str) -> str:
@@ -100,6 +121,12 @@ class Summary:
     missing_right: int
     left_rows: int
     right_rows: int
+    duplicate_keys_left: int = 0
+    """Keys that occur more than once in the left frame."""
+    duplicate_keys_right: int = 0
+    """Keys that occur more than once in the right frame."""
+    duplicates: str = "match"
+    """How rows sharing a key were paired (``match`` or ``number``)."""
 
     @property
     def found(self) -> int:
@@ -200,6 +227,35 @@ class DiffResult:
         )
 
     # ---- column groups ------------------------------------------------------
+
+    @property
+    def has_duplicates(self) -> bool:
+        """Whether a key occurs more than once on one side."""
+        return COUNT_LEFT in self.data.columns
+
+    @property
+    def duplicate_rows(self) -> int:
+        """Rows of the result whose key is not unique on a side."""
+        if not self.has_duplicates:
+            return 0
+        return int(self.data.select(duplicate_key().sum()).item())
+
+    @property
+    def duplicates(self) -> pl.DataFrame:
+        """Keys that occur more than once on a side, with their count per side.
+
+        Columns: ``<keys>``, ``<left_name>``, ``<right_name>`` (number of rows
+        with that key on each side). Empty if every key is unique.
+        """
+        names = {COUNT_LEFT: self.left_name, COUNT_RIGHT: self.right_name}
+        if not self.has_duplicates:
+            schema: dict[str, DataType] = {k: self.data.schema[k] for k in self.keys}
+            return pl.DataFrame(schema={**schema, **dict.fromkeys(names.values(), pl.UInt32())})
+        return (
+            self.data.filter(duplicate_key())
+            .select(*self.keys, *(pl.col(c).alias(n) for c, n in names.items()))
+            .unique(self.keys, maintain_order=True)
+        )
 
     @property
     def compared(self) -> tuple[str, ...]:
@@ -535,6 +591,8 @@ def compare(
     right_name: str = "right",
     ignore_columns: Iterable[str] = (),
     strict: bool = True,
+    duplicates: Duplicates = "match",
+    order_by: str | Sequence[str] | None = None,
 ) -> DiffResult:
     """Match two frames on ``key`` and classify every row.
 
@@ -551,8 +609,9 @@ def compare(
     Args:
         left: Left frame (polars, pandas, pyarrow, …).
         right: Right frame.
-        key: Column name or list of column names; the combination must be unique
-            on each side. Null keys match null keys.
+        key: Column name or list of column names. Null keys match null keys.
+            Rows that share a key on one side are paired as ``duplicates``
+            says; see :attr:`DiffResult.duplicates`.
         left_name: Display name of the left side.
         right_name: Display name of the right side.
         ignore_columns: Columns to leave out of the comparison entirely.
@@ -560,12 +619,24 @@ def compare(
             aligns lossless differences such as integer width, ``Float32`` vs.
             ``Float64``, time units within one time zone or text vs.
             ``Categorical``.
+        duplicates: How rows that share a key are paired with the rows of
+            the other side. ``"match"`` (the default) pairs identical rows
+            first, then each remaining row with the most similar one (fewest
+            differing columns), regardless of the row order. ``"number"``
+            pairs them by position: the first row with a key on the left with
+            the first one on the right, and so on (sorted by ``order_by``
+            first, if given). ``"raise"`` refuses keys that are not unique.
+            Rows left over because a key occurs more often on one side are
+            only in that side.
+        order_by: Column(s) that sort rows sharing a key before they are
+            numbered (``duplicates="number"`` only); default: row order.
 
     Returns:
         A :class:`DiffResult`.
 
     Raises:
-        ValueError: On missing or duplicate keys, key or value columns whose
+        ValueError: On missing keys, duplicate keys with ``duplicates="raise"``,
+            an unknown ``duplicates`` mode, key or value columns whose
             dtypes differ beyond a lossless alignment (one error lists them all,
             each with a cast), reserved column names or identical side names.
         TypeError: If an input cannot be converted to polars.
@@ -577,8 +648,7 @@ def compare(
     lf, rf = to_polars(left, left_name), to_polars(right, right_name)
     keys = (key,) if isinstance(key, str) else tuple(key)
     _validate_keys(lf, rf, keys, left_name, right_name)
-    for name, df in ((left_name, lf), (right_name, rf)):
-        _check_unique(df, keys, name)
+    order = _check_duplicates(lf, rf, keys, left_name, right_name, duplicates, order_by)
 
     ignore_list = list(dict.fromkeys(ignore_columns))
     ignored = set(ignore_list) - set(keys)
@@ -603,14 +673,39 @@ def compare(
     rsel = rf.select(
         *keys, *(pl.col(c).alias(rcol(c)) for c in rcols), pl.lit(True).alias(_IN_RIGHT)
     )
+    key_counts = _key_counts(lf, rf, keys)
+    on = list(keys)
+    if key_counts is not None:
+        # keys that are not unique: join on (key, occurrence) instead
+        locc, rocc = _occurrences(
+            lf, rf, lsel, rsel, keys, key_counts, compared, casts, duplicates, order
+        )
+        lsel, rsel = lsel.with_columns(locc.alias(_OCC)), rsel.with_columns(rocc.alias(_OCC))
+        on.append(_OCC)
     joined = lsel.lazy().join(
         rsel.lazy(),
-        on=list(keys),
+        on=on,
         how="full",
         coalesce=True,
         nulls_equal=True,
         maintain_order="left_right",
     )
+    if key_counts is not None:
+        # counts of the keys that are not unique (a small table); 1 or 0 otherwise
+        joined = (
+            joined.drop(_OCC)
+            .join(
+                key_counts.lazy(),
+                on=list(keys),
+                how="left",
+                nulls_equal=True,
+                maintain_order="left",
+            )
+            .with_columns(
+                pl.col(COUNT_LEFT).fill_null(pl.col(_IN_LEFT).fill_null(False).cast(pl.UInt32)),
+                pl.col(COUNT_RIGHT).fill_null(pl.col(_IN_RIGHT).fill_null(False).cast(pl.UInt32)),
+            )
+        )
 
     in_l = pl.col(_IN_LEFT).fill_null(False)
     in_r = pl.col(_IN_RIGHT).fill_null(False)
@@ -663,6 +758,9 @@ def compare(
         missing_right=int(counts[f"{_PREFIX}n:missing_right"]),
         left_rows=lf.height,
         right_rows=rf.height,
+        duplicate_keys_left=0 if key_counts is None else int((key_counts[COUNT_LEFT] > 1).sum()),
+        duplicate_keys_right=0 if key_counts is None else int((key_counts[COUNT_RIGHT] > 1).sum()),
+        duplicates="number" if duplicates == "number" else "match",
     )
     return DiffResult(
         data=data,
@@ -692,6 +790,214 @@ def _differs(name: str, ldtype: DataType, rdtype: DataType, cast: DataType | Non
     return ~left.eq_missing(right)
 
 
+def _key_counts(lf: pl.DataFrame, rf: pl.DataFrame, keys: tuple[str, ...]) -> pl.DataFrame | None:
+    """Rows per side of every key that is not unique on a side; ``None`` if none is.
+
+    Only the rows of such keys are grouped, so unique keys cost one hash pass.
+    """
+    on = list(keys)
+    ldup = lf.select(keys).filter(lf.select(keys).is_duplicated())
+    rdup = rf.select(keys).filter(rf.select(keys).is_duplicated())
+    if ldup.is_empty() and rdup.is_empty():
+        return None
+    dup_keys = pl.concat([ldup, rdup]).unique()
+    gl = (
+        lf.select(keys)
+        .join(dup_keys, on=on, how="semi", nulls_equal=True)
+        .group_by(on)
+        .len(COUNT_LEFT)
+    )
+    gr = (
+        rf.select(keys)
+        .join(dup_keys, on=on, how="semi", nulls_equal=True)
+        .group_by(on)
+        .len(COUNT_RIGHT)
+    )
+    return gl.join(gr, on=on, how="full", coalesce=True, nulls_equal=True).with_columns(
+        pl.col(COUNT_LEFT, COUNT_RIGHT).fill_null(0).cast(pl.UInt32)
+    )
+
+
+def _normalised(
+    name: str, side: Literal["l", "r"], dtype: DataType, cast: DataType | None
+) -> pl.Expr:
+    """The value of ``name`` as :func:`_differs` compares it (for hashing)."""
+    value = pl.col(lcol(name) if side == "l" else rcol(name))
+    if cast == pl.String:
+        return as_text(value, dtype)
+    if cast is not None:
+        value = value.cast(cast, strict=False)
+    if (cast or dtype).is_float():
+        value = value.fill_nan(None)
+    return value
+
+
+def _occurrences(  # noqa: PLR0917 - internal helper of compare()
+    lf: pl.DataFrame,
+    rf: pl.DataFrame,
+    lsel: pl.DataFrame,
+    rsel: pl.DataFrame,
+    keys: tuple[str, ...],
+    counts: pl.DataFrame,
+    compared: list[str],
+    casts: dict[str, DataType | None],
+    mode: str,
+    order: list[str],
+) -> tuple[pl.Series, pl.Series]:
+    """Occurrence number per row on each side; the join pairs equal numbers.
+
+    Rows of unique keys keep 0. The left rows of a key that is not unique are
+    numbered 0, 1, …; each right row gets the number of the left row it is
+    paired with, unpaired right rows numbers after the last left one (so they
+    stay only in the right side). Only the rows of such keys are touched.
+    """
+    on = list(keys)
+    li, ri = f"{_PREFIX}li", f"{_PREFIX}ri"
+    dup_keys = counts.select(on)
+
+    if mode == "number":
+        # lf/rf hold the rows in the same order as lsel/rsel (and the order_by columns)
+        lpart = lf.with_row_index(li).join(dup_keys, on=on, how="semi", nulls_equal=True)
+        rpart = rf.with_row_index(ri).join(dup_keys, on=on, how="semi", nulls_equal=True)
+        lpart = lpart.select(li, _number_within(lpart, on, order).alias(_OCC))
+        rpart = rpart.select(ri, _number_within(rpart, on, order).alias(_OCC))
+        return _scatter(lsel.height, lpart, li), _scatter(rsel.height, rpart, ri)
+
+    h, rank = f"{_PREFIX}h", f"{_PREFIX}rank"
+    lval = [_normalised(c, "l", lf.schema[c], casts[c]) for c in compared]
+    rval = [_normalised(c, "r", rf.schema[c], casts[c]) for c in compared]
+    ldup = (
+        lsel.select(*keys, *(lcol(c) for c in compared))
+        .with_row_index(li)
+        .join(dup_keys, on=on, how="semi", nulls_equal=True)
+        .with_columns((pl.struct(lval).hash() if lval else pl.lit(0, pl.UInt64)).alias(h))
+    )
+    ldup = ldup.with_columns(_number_within(ldup, on).alias(_OCC))
+    rdup = (
+        rsel.select(*keys, *(rcol(c) for c in compared))
+        .with_row_index(ri)
+        .join(dup_keys, on=on, how="semi", nulls_equal=True)
+        .with_columns((pl.struct(rval).hash() if rval else pl.lit(0, pl.UInt64)).alias(h))
+    )
+
+    # 1. identical rows: the n-th copy of a row on the left pairs with the n-th on the right
+    exact = ldup.select(*on, h, li, _OCC, _number_within(ldup, [*on, h]).alias(rank)).join(
+        rdup.select(*on, h, ri, _number_within(rdup, [*on, h]).alias(rank)),
+        on=[*on, h, rank],
+        nulls_equal=True,
+    )
+    pairs = [exact.select(ri, _OCC)]
+    lrest = ldup.join(exact.select(li), on=li, how="anti")
+    rrest = rdup.join(exact.select(ri), on=ri, how="anti")
+
+    # 2. the rest: the most similar rows (fewest differing columns) within small
+    #    groups; groups too large to compare every pair are paired by position
+    sizes = (
+        lrest.group_by(on).len("nl")
+        .join(rrest.group_by(on).len("nr"), on=on, nulls_equal=True)
+        .with_columns((pl.col("nl") * pl.col("nr")).alias("n"))
+        .sort("n")
+        .with_columns((pl.col("n").cum_sum() <= _MAX_CANDIDATES).alias("small"))
+        .with_columns(pl.col("small") & (pl.col("n") <= _MAX_GROUP_CANDIDATES))
+    )  # fmt: skip
+    small, large = sizes.filter("small").select(on), sizes.filter(~pl.col("small")).select(on)
+    if not small.is_empty():
+        differs = [
+            _differs(c, lf.schema[c], rf.schema[c], casts[c]).cast(pl.UInt32) for c in compared
+        ]
+        cand = (
+            lrest.join(small, on=on, how="semi", nulls_equal=True)
+            .join(
+                rrest.join(small, on=on, how="semi", nulls_equal=True),
+                on=on,
+                nulls_equal=True,
+            )
+            .select(li, ri, _OCC, (pl.sum_horizontal(differs) if differs else pl.lit(0)).alias("n"))
+            .sort("n", li, ri)
+        )
+        pairs.append(_greedy(cand, li, ri))
+    if not large.is_empty():
+        lbig = lrest.join(large, on=on, how="semi", nulls_equal=True)
+        rbig = rrest.join(large, on=on, how="semi", nulls_equal=True)
+        pairs.append(
+            lbig.select(*on, _OCC, _number_within(lbig, on).alias(rank))
+            .join(
+                rbig.select(*on, ri, _number_within(rbig, on).alias(rank)),
+                on=[*on, rank],
+                nulls_equal=True,
+            )
+            .select(ri, _OCC)
+        )
+
+    # 3. unpaired right rows: numbers after the last left row of their key
+    paired = pl.concat([p.cast({ri: pl.UInt32, _OCC: pl.UInt32}) for p in pairs])
+    unpaired = (
+        rdup.select(*on, ri)
+        .join(paired, on=ri, how="anti")
+        .join(counts.select(*on, COUNT_LEFT), on=on, nulls_equal=True)
+    )
+    unpaired = unpaired.select(
+        ri, (pl.col(COUNT_LEFT) + _number_within(unpaired, on)).cast(pl.UInt32).alias(_OCC)
+    )
+    rpart = pl.concat([paired, unpaired])
+    return _scatter(lsel.height, ldup.select(li, _OCC), li), _scatter(rsel.height, rpart, ri)
+
+
+def _number_within(df: pl.DataFrame, by: list[str], order: Sequence[str] = ()) -> pl.Series:
+    """0, 1, … for the rows of each group of ``by``, aligned with the rows of ``df``.
+
+    Rows are numbered in row order, or sorted by ``order``. Sort-based, because
+    ``int_range(...).over(by)`` is several times slower on many small groups.
+    """
+    idx, pos = f"{_PREFIX}i", pl.int_range(pl.len(), dtype=pl.UInt32)
+    group = (pl.struct(by) if len(by) > 1 else pl.col(by[0])).rle_id()
+    numbered = (
+        df.select(*by, *order)
+        .with_row_index(idx)
+        .sort([*by, *order], maintain_order=True, nulls_last=True)
+        .select(idx, pos - pl.when(group.diff().fill_null(1) != 0).then(pos).forward_fill())
+    )
+    occ = pl.zeros(df.height, pl.UInt32, eager=True)
+    return occ.scatter(numbered.get_column(idx), numbered.to_series(1).cast(pl.UInt32))
+
+
+def _greedy(cand: pl.DataFrame, li: str, ri: str) -> pl.DataFrame:
+    """Pair rows from candidate pairs sorted by distance, each row at most once.
+
+    Same result as walking the sorted list and taking every pair whose rows
+    are both still free, but vectorised: in each round, every pair that is the
+    best one of both its rows is taken, and the pairs of the taken rows drop
+    out. With a strict order on the pairs, the best remaining pair always
+    qualifies, so each round takes at least one; a few rounds are typical.
+    """
+    k = f"{_PREFIX}k"
+    cand = cand.select(li, ri, _OCC).with_row_index(k)  # already sorted best first
+    taken: list[pl.DataFrame] = []
+    while not cand.is_empty():
+        best = cand.select(
+            pl.col(k).min().over(li).alias("bl"), pl.col(k).min().over(ri).alias("br"), k
+        )
+        mutual = cand.filter(
+            (best.get_column(k) == best.get_column("bl"))
+            & (best.get_column(k) == best.get_column("br"))
+        )
+        taken.append(mutual.select(ri, _OCC))
+        cand = cand.join(mutual.select(li), on=li, how="anti").join(
+            mutual.select(ri), on=ri, how="anti"
+        )
+    if not taken:
+        return pl.DataFrame(schema={ri: pl.UInt32, _OCC: pl.UInt32})
+    return pl.concat(taken).cast({ri: pl.UInt32, _OCC: pl.UInt32})
+
+
+def _scatter(height: int, part: pl.DataFrame, index: str) -> pl.Series:
+    """Occurrence numbers for all rows: 0, except the rows listed in ``part``."""
+    occ = pl.zeros(height, pl.UInt32, eager=True)
+    if part.is_empty():
+        return occ
+    return occ.scatter(part.get_column(index), part.get_column(_OCC))
+
+
 def _validate_keys(
     lf: pl.DataFrame, rf: pl.DataFrame, keys: tuple[str, ...], lname: str, rname: str
 ) -> None:
@@ -711,6 +1017,30 @@ def _validate_keys(
         if reserved:
             msg = f"{name}: column names starting with {_PREFIX!r} are reserved: {reserved}"
             raise ValueError(msg)
+
+
+def _check_duplicates(  # noqa: PLR0917 - internal helper of compare()
+    lf: pl.DataFrame,
+    rf: pl.DataFrame,
+    keys: tuple[str, ...],
+    lname: str,
+    rname: str,
+    duplicates: str,
+    order_by: str | Sequence[str] | None,
+) -> list[str]:
+    """Validate ``duplicates`` and ``order_by``; return the ``order_by`` columns."""
+    if duplicates not in {"match", "number", "raise"}:
+        msg = f"duplicates must be 'match', 'number' or 'raise', got {duplicates!r}"
+        raise ValueError(msg)
+    order = [] if order_by is None else [order_by] if isinstance(order_by, str) else list(order_by)
+    for name, df in ((lname, lf), (rname, rf)):
+        if duplicates == "raise":
+            _check_unique(df, keys, name)
+        missing = [c for c in order if c not in df.columns]
+        if missing:
+            msg = f"order_by column(s) {missing} missing in {name}."
+            raise ValueError(msg)
+    return order
 
 
 def _check_unique(df: pl.DataFrame, keys: tuple[str, ...], name: str) -> None:
