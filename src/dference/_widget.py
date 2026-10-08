@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 
     import polars as pl
 
+    from ._compare import Duplicates
+
 __all__ = ["DataFrameDiff"]
 
 _STATIC = Path(__file__).parent / "static"
@@ -58,6 +60,11 @@ class DataFrameDiff(anywidget.AnyWidget):
         ignore_columns: Columns to leave out of the comparison.
         strict: Require identical dtypes on both sides; ``False`` aligns
             lossless differences (see :func:`~dference.compare`).
+        duplicates: How rows sharing a key are paired (``"match"``,
+            ``"number"`` or ``"raise"``, see :func:`~dference.compare`). The
+            widget shows a notice if a key is not unique.
+        order_by: Sort rows sharing a key before numbering them
+            (``duplicates="number"`` only).
         page_size: Initial rows per page (the user can change it).
         text_diff: Compare differing texts like ``git diff`` (a unified diff
             with the differing words highlighted) in the detail view and the
@@ -93,6 +100,8 @@ class DataFrameDiff(anywidget.AnyWidget):
         right_short: str | None = None,
         ignore_columns: Iterable[str] = (),
         strict: bool = True,
+        duplicates: Duplicates = "match",
+        order_by: str | Sequence[str] | None = None,
         page_size: int = 10,
         text_diff: bool = True,
         **kwargs: Any,
@@ -105,6 +114,8 @@ class DataFrameDiff(anywidget.AnyWidget):
             right_name=right_name,
             ignore_columns=ignore_columns,
             strict=strict,
+            duplicates=duplicates,
+            order_by=order_by,
         )
         self._init_from_result(
             result,
@@ -273,4 +284,8 @@ def _summary_payload(result: DiffResult) -> dict[str, Any]:
         "left_only_cols": [c.name for c in result.columns if c.kind == "left_only"],
         "right_only_cols": [c.name for c in result.columns if c.kind == "right_only"],
         "ignored": list(result.ignored),
+        "duplicate_keys_left": s.duplicate_keys_left,
+        "duplicate_keys_right": s.duplicate_keys_right,
+        "duplicate_rows": result.duplicate_rows,
+        "duplicates": s.duplicates,
     }

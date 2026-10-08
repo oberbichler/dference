@@ -39,6 +39,10 @@
  * @property {string[]} left_only_cols
  * @property {string[]} right_only_cols
  * @property {string[]} ignored
+ * @property {number} duplicate_keys_left Keys that occur more than once on the left.
+ * @property {number} duplicate_keys_right Keys that occur more than once on the right.
+ * @property {number} duplicate_rows Rows whose key is not unique on a side.
+ * @property {"match"|"number"} duplicates How rows sharing a key were paired.
  */
 /**
  * Traits synced with the Python `DataFrameDiff` widget.
@@ -55,8 +59,9 @@
  */
 /**
  * One row as sent by Python. `l`/`r` are aligned with `columns` and `null`
- * for a side that does not exist in this row; `d` lists differing columns.
- * @typedef {{id: number, s: Status, d: number[], l: Value[]|null, r: Value[]|null}} Row
+ * for a side that does not exist in this row; `d` lists differing columns;
+ * `k` is how often the key occurs on the left and right, if it is not unique.
+ * @typedef {{id: number, s: Status, d: number[], l: Value[]|null, r: Value[]|null, k?: [number, number]}} Row
  */
 /** @typedef {{op: string, a: string, b: string}} Filter */
 /** @typedef {{col: number|"status", dir: 1|-1}} Sort */
@@ -605,6 +610,8 @@ function render({ model, el }) {
   /** UI state; everything in `query()` is evaluated on the Python side. */
   const state = {
     statuses: /** @type {Set<Status>} */ (new Set(STATUS_ORDER)),
+    /** Only rows whose key is not unique on a side. */
+    dupOnly: false,
     search: "",
     sort: /** @type {Sort|null} */ (null),
     page: 0,
@@ -664,6 +671,24 @@ function render({ model, el }) {
   const symbol = (s) => ({ equal: "=", mismatch: "≠", missing_left: M.RS, missing_right: M.LS })[s];
   /** @param {Status} s */
   const badge = (s) => `<span class="dfd-badge st-${s}" aria-hidden="true">${esc(symbol(s))}</span>`;
+  /**
+   * How often the key of a row occurs per side, e.g. "Key occurs 3× in CRM and 2× in ERP".
+   * @param {[number, number]} k
+   */
+  const dupText = ([l, r]) => `Key occurs ${n(l)}× in ${M.L} and ${n(r)}× in ${M.R}`;
+  /**
+   * Chip for a row whose key is not unique: the larger count, e.g. `×3`.
+   * @param {Row} row
+   */
+  const dupChip = (row) =>
+    row.k ? `<span class="dfd-dup" title="${esc(dupText(row.k))}">×${n(Math.max(...row.k))}</span>` : "";
+  /**
+   * Chip in the status column; rows with a unique key keep its room free, so
+   * all badges stay in line.
+   * @param {Row} row
+   */
+  const dupSlot = (row) =>
+    row.k ? dupChip(row) : M.summary.duplicate_rows ? '<span class="dfd-dup empty" aria-hidden="true"></span>' : "";
   /**
    * Chip of a side: its short name on the side colour.
    * @param {"l"|"r"} side
@@ -789,6 +814,7 @@ function render({ model, el }) {
   function queryPayload() {
     return {
       statuses: [...state.statuses],
+      duplicates_only: state.dupOnly,
       search: state.search,
       diff_column: state.diffColumn,
       diff_equal: state.diffEqual,
@@ -921,7 +947,24 @@ function render({ model, el }) {
     if (S.left_only_cols.length) extra.push(`only in ${esc(M.L)}: ${S.left_only_cols.map(esc).join(", ")}`);
     if (S.right_only_cols.length) extra.push(`only in ${esc(M.R)}: ${S.right_only_cols.map(esc).join(", ")}`);
     if (S.ignored?.length) extra.push(`ignored: ${S.ignored.map(esc).join(", ")}`);
-    $(".dfd-overview").innerHTML = `
+    const dupKeys = S.duplicate_keys_left + S.duplicate_keys_right;
+    const notice = dupKeys
+      ? `<div class="dfd-notice" role="status"><b>Keys are not unique:</b>
+          ${[
+            [S.duplicate_keys_left, M.L],
+            [S.duplicate_keys_right, M.R],
+          ]
+            .filter(([c]) => c)
+            .map(([c, side]) => `${n(Number(c))} key${c === 1 ? " occurs" : "s occur"} more than once in ${esc(side)}`)
+            .join(", ")}.
+          ${
+            S.duplicates === "number"
+              ? "Rows with the same key were paired in order."
+              : "Rows with the same key were paired by content: identical rows first, then the most similar ones."
+          }
+          <button class="dfd-link" data-act="dup-only">${state.dupOnly ? "Show all rows" : `Show these ${n(S.duplicate_rows)} rows`}</button></div>`
+      : "";
+    $(".dfd-overview").innerHTML = `${notice}
       <div class="dfd-bars" aria-hidden="true">
         <div class="dfd-dist">${seg}</div>
         <div class="dfd-dist">${seg2}</div>
@@ -977,12 +1020,24 @@ function render({ model, el }) {
               <button class="dfd-only" data-only="${s}" title="Show only ${esc(label(s))}">only</button>
             </label>`,
           ).join("")}
+          ${
+            S.duplicate_rows
+              ? `<label class="dfd-opt dfd-opt-dup">
+              <input type="checkbox" data-dup-only ${state.dupOnly ? "checked" : ""}>
+              <span class="dfd-dup" aria-hidden="true">×</span>
+              <span class="dfd-opt-text"><span>Duplicate keys only</span><small>Rows whose key occurs more than once on a side</small></span>
+              <b>${n(S.duplicate_rows)}</b>
+            </label>`
+              : ""
+          }
         </div>
       </div>`;
   }
 
   /** Update the checkboxes of an open status menu in place (keeps the focus). */
   function syncStatusMenu() {
+    const dup = root.querySelector(".dfd-colmenu [data-dup-only]");
+    if (dup instanceof HTMLInputElement) dup.checked = state.dupOnly;
     for (const cb of root.querySelectorAll(".dfd-colmenu [data-status]")) {
       if (cb instanceof HTMLInputElement)
         cb.checked = isStatus(cb.dataset.status) && state.statuses.has(/** @type {Status} */ (cb.dataset.status));
@@ -995,6 +1050,10 @@ function render({ model, el }) {
       parts.push(`<span class="dfd-pillfilter col">
         <button class="dfd-pill-edit" data-colmenu="status" title="Edit status filter"><b>Status</b> ${esc(statusSummaryText())}</button>
         <button data-act="clear-status" aria-label="Remove status filter">×</button></span>`);
+    if (state.dupOnly)
+      parts.push(`<span class="dfd-pillfilter col">
+        <button class="dfd-pill-edit" data-colmenu="status" title="Edit status filter"><b>Duplicate keys</b> only</button>
+        <button data-act="clear-dup" aria-label="Remove duplicate key filter">×</button></span>`);
     for (const [i, f] of state.filters) {
       const c = M.columns[i];
       parts.push(`<span class="dfd-pillfilter col">
@@ -1119,7 +1178,7 @@ function render({ model, el }) {
           (r) => `
         <tr data-id="${r.id}" class="st-${r.s} ${selected.has(r.id) ? "sel" : ""} ${activeId === r.id ? "active" : ""}">
           <td class="cb"><input type="checkbox" data-sel="${r.id}" ${selected.has(r.id) ? "checked" : ""} aria-label="Select row"></td>
-          <td class="status" title="${esc(`${label(r.s)}: ${hint(r.s)}`)}"><span class="dfd-sr">${esc(label(r.s))}</span>${badge(r.s)}</td>
+          <td class="status" title="${esc(`${label(r.s)}: ${hint(r.s)}`)}"><span class="dfd-sr">${esc(label(r.s))}</span><span class="dfd-st">${badge(r.s)}${dupSlot(r)}</span></td>
           ${cols.map((i) => td(r, i)).join("")}
         </tr>`,
         )
@@ -1138,7 +1197,7 @@ function render({ model, el }) {
           <th class="status">
             <div class="dfd-th-top">
               <button class="dfd-sort" data-sort="status" title="Sort">Status<span class="dfd-arrow">${stArrow}</span></button>
-              <button class="dfd-colbtn ${state.statuses.size !== STATUS_ORDER.length ? "on" : ""} ${state.colMenu === "status" ? "open" : ""}" data-colmenu="status"
+              <button class="dfd-colbtn ${state.statuses.size !== STATUS_ORDER.length || state.dupOnly ? "on" : ""} ${state.colMenu === "status" ? "open" : ""}" data-colmenu="status"
                 aria-label="Sort and filter by status" aria-haspopup="dialog" title="Sort and filter">${FUNNEL}</button>
             </div>
           </th>
@@ -1252,6 +1311,7 @@ function render({ model, el }) {
       <section class="dfd-detail st-${row.s}" aria-label="Row details">
         <header>
           <span class="dfd-pill">${badge(row.s)}${esc(label(row.s))}</span>
+          ${row.k ? `<span class="dfd-pill">${dupChip(row)}${esc(dupText(row.k))}</span>` : ""}
           <span class="dfd-detail-key">${key}</span>
           <span class="dfd-spacer"></span>
           <span class="dfd-pager">
@@ -1632,6 +1692,10 @@ function render({ model, el }) {
       }
       case "clear-status":
         return setStatuses(STATUS_ORDER);
+      case "dup-only":
+      case "clear-dup":
+        state.dupOnly = act === "dup-only" && !state.dupOnly;
+        return changed({ overview: true });
       case "clear-filters":
         state.filters.clear();
         return changed();
@@ -1652,7 +1716,13 @@ function render({ model, el }) {
       case "export":
         return exportCsv();
       case "reset":
-        Object.assign(state, { statuses: new Set(STATUS_ORDER), search: "", diffColumn: null, diffEqual: false });
+        Object.assign(state, {
+          statuses: new Set(STATUS_ORDER),
+          dupOnly: false,
+          search: "",
+          diffColumn: null,
+          diffEqual: false,
+        });
         state.filters.clear();
         searchInput.value = "";
         return changed({ overview: true });
@@ -1721,6 +1791,10 @@ function render({ model, el }) {
       return;
     }
     const checked = t instanceof HTMLInputElement && t.checked;
+    if (t.dataset.dupOnly !== undefined) {
+      state.dupOnly = checked;
+      return changed({ overview: true });
+    }
     switch (t.dataset.act) {
       case "only-diff":
         state.onlyDiffCols = checked;
@@ -1801,7 +1875,14 @@ function render({ model, el }) {
   /** New comparison from Python (e.g. widget re-used): reset and refetch. */
   function onMeta() {
     M = meta();
-    Object.assign(state, { diffColumn: null, diffEqual: false, detail: null, colMenu: null, flyover: null });
+    Object.assign(state, {
+      dupOnly: false,
+      diffColumn: null,
+      diffEqual: false,
+      detail: null,
+      colMenu: null,
+      flyover: null,
+    });
     state.filters.clear();
     renderColMenu();
     renderFlyover();

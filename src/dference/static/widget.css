@@ -165,6 +165,48 @@
   opacity: 0.8;
 }
 
+/* ---------- keys that are not unique ---------- */
+.dfd-notice {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--st-mismatch) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--st-mismatch) 45%, transparent);
+}
+.dfd-notice b {
+  font-weight: 600;
+}
+.dfd-st {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.dfd-dup {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  min-width: 20px;
+  padding: 0 3px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  flex: none;
+}
+.dfd-dup.empty {
+  visibility: hidden;
+}
+.dfd-opt-dup {
+  border-top: 1px solid var(--dfd-line);
+  border-radius: 0 0 6px 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
 /* ---------- toolbar ---------- */
 .dfd-toolbar {
   display: flex;

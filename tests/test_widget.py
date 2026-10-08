@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from importlib.resources import files
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+import polars as pl
 import pytest
 
 from dference import DataFrameDiff, compare
+from dference._query import Query
 from dference._widget import short_names
-
-if TYPE_CHECKING:
-    import polars as pl
 
 
 class Recorder:
@@ -151,3 +150,27 @@ def test_text_diff_default_and_option(left: pl.DataFrame, right: pl.DataFrame) -
     assert DataFrameDiff(left, right, key="id", text_diff=False).text_diff is False
     result = compare(left, right, key="id")
     assert DataFrameDiff.from_result(result, text_diff=False).text_diff is False
+
+
+def test_duplicate_keys_are_reported_and_filterable() -> None:
+    left = pl.DataFrame({"id": [1, 1, 2], "v": ["a", "b", "x"]})
+    right = pl.DataFrame({"id": [1, 2], "v": ["b", "x"]})
+    w = DataFrameDiff(left, right, key="id")
+    assert w.summary["duplicate_keys_left"] == 1
+    assert w.summary["duplicate_keys_right"] == 0
+    assert w.summary["duplicate_rows"] == 2
+    assert w.summary["duplicates"] == "match"
+    page = w._engine.page(Query(duplicates_only=True), 0, 10)
+    assert page["filtered"] == 2
+    assert all(row["k"] == [2, 1] for row in page["rows"])
+    unique = w._engine.page(Query(), 0, 10)["rows"]
+    assert [row.get("k") for row in unique if row["l"] and row["l"][0] == 2] == [None]
+    parsed = Query.from_message({"duplicates_only": True}, w.result.columns)
+    assert parsed.duplicates_only
+
+
+def test_duplicates_parameter_is_passed_on() -> None:
+    left = pl.DataFrame({"id": [1, 1], "v": ["a", "b"]})
+    with pytest.raises(ValueError, match="share a key"):
+        DataFrameDiff(left, left, key="id", duplicates="raise")
+    assert DataFrameDiff(left, left, key="id", duplicates="number").summary["equal"] == 2

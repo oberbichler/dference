@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Keys no longer need to be unique. Rows that share a key are paired by
+  content (`duplicates="match"`, the default: identical rows first, then the
+  most similar ones), by position (`duplicates="number"`, optionally sorted by
+  `order_by`), or refused as before (`duplicates="raise"`). Surplus rows of a
+  key count as only in that side. `DiffResult.duplicates`,
+  `DiffResult.duplicate_rows` and the new `Summary` fields describe them. The
+  widget shows a notice, a `×N` chip on the affected rows and a "Duplicate
+  keys only" filter in the status column menu.
+
 - Differing texts are compared like `git diff`: the detail view and the
   flyover show a unified diff (lines matched with Myers' algorithm, removed
   lines in the left side's colour, added lines in the right side's, long

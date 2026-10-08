@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any, Final
 import polars as pl
 
 from ._compare import (
+    COUNT_LEFT,
+    COUNT_RIGHT,
     ROW,
     STATUS,
     STATUS_ORDER,
@@ -35,6 +37,7 @@ from ._compare import (
     Status,
     as_text,
     dcol,
+    duplicate_key,
     lcol,
     rcol,
 )
@@ -91,6 +94,8 @@ class Query:
     """
 
     statuses: frozenset[Status] = field(default_factory=lambda: frozenset(STATUS_ORDER))
+    #: only rows whose key is not unique on a side
+    duplicates_only: bool = False
     search: str = ""
     diff_column: int | None = None
     #: with ``diff_column``: rows *equal* in that column instead of differing
@@ -133,6 +138,7 @@ class Query:
         sort_col = sort.get("column") if isinstance(sort, Mapping) else None
         return cls(
             statuses=statuses,
+            duplicates_only=msg.get("duplicates_only") is True,
             search=str(msg.get("search", ""))[:500],
             diff_column=diff_column,
             diff_equal=diff_column is not None and msg.get("diff_equal") is True,
@@ -230,7 +236,8 @@ class ViewEngine:
 
         Each row is ``{"id", "s", "d", "l", "r"}``: status, indices of differing
         columns and the left/right values aligned with ``columns`` (``None``
-        for a side that does not exist in that row).
+        for a side that does not exist in that row). A row whose key is not
+        unique also has ``"k": [left count, right count]``.
         """
         if ids.is_empty():
             return []
@@ -246,6 +253,9 @@ class ViewEngine:
         ]
         needed = {ROW, STATUS} | {n for n in (*lsrc, *rsrc) if n}
         needed |= {dcol(cols[i].name) for i in self._compared_idx}
+        dups = self.result.has_duplicates
+        if dups:
+            needed |= {COUNT_LEFT, COUNT_RIGHT}
         page = self.result.data.select(pl.col(sorted(needed)).gather(ids)).to_dicts()
 
         rows: list[dict[str, Any]] = []
@@ -253,15 +263,16 @@ class ViewEngine:
             status = rec[STATUS]
             has_l = status != Status.MISSING_LEFT.value
             has_r = status != Status.MISSING_RIGHT.value
-            rows.append(
-                {
-                    "id": rec[ROW],
-                    "s": status,
-                    "d": [i for i in self._compared_idx if rec[dcol(cols[i].name)]],
-                    "l": [_json(rec[n]) if n else None for n in lsrc] if has_l else None,
-                    "r": [_json(rec[n]) if n else None for n in rsrc] if has_r else None,
-                }
-            )
+            row = {
+                "id": rec[ROW],
+                "s": status,
+                "d": [i for i in self._compared_idx if rec[dcol(cols[i].name)]],
+                "l": [_json(rec[n]) if n else None for n in lsrc] if has_l else None,
+                "r": [_json(rec[n]) if n else None for n in rsrc] if has_r else None,
+            }
+            if dups and (rec[COUNT_LEFT] > 1 or rec[COUNT_RIGHT] > 1):
+                row["k"] = [rec[COUNT_LEFT], rec[COUNT_RIGHT]]
+            rows.append(row)
         return rows
 
     # ---- expression building ------------------------------------------------
@@ -269,6 +280,8 @@ class ViewEngine:
     def _predicate(self, q: Query) -> pl.Expr:
         """Combine all parts of the query into one boolean expression."""
         parts: list[pl.Expr] = []
+        if q.duplicates_only:
+            parts.append(duplicate_key() if self.result.has_duplicates else pl.lit(False))
         if len(q.statuses) < len(STATUS_ORDER):
             parts.append(pl.col(STATUS).is_in([s.value for s in q.statuses]))
         if q.diff_column is not None:
