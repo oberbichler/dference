@@ -198,14 +198,18 @@
   flex: none;
 }
 /* one chip per side the key repeats on, like the side chips of the values */
+/* same height, radius and type as the status badge next to them, and one
+   width for all (counts up to three digits), so the column reads as a grid */
 .dfd-dup.l,
 .dfd-dup.r {
-  height: 15px;
-  min-width: 28px;
+  height: 18px;
+  min-width: 40px;
+  padding: 0 4px;
   border: 0;
+  border-radius: 4px;
   background: var(--side);
   color: #fff;
-  font-size: 9px;
+  font-size: 11px;
   opacity: 1;
 }
 .dfd-dup.l {

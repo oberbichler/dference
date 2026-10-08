@@ -779,6 +779,13 @@ def test_duplicate_keys_notice_chip_and_filter(page: Page) -> None:
         "bs => bs.map(b => b.getBoundingClientRect().left)",
     )
     assert len(set(lefts)) == 1
+    # all chips in the status column are as high as the badge, the side chips as wide
+    sizes = ui.page.eval_on_selector_all(
+        ".dfd-scroll tbody .dfd-st > *",
+        "els => els.map(e => [e.className, e.getBoundingClientRect().width, e.getBoundingClientRect().height])",
+    )
+    assert {h for _, _, h in sizes} == {18}
+    assert len({w for cls, w, _ in sizes if "dfd-dup" in cls}) == 1
     assert ui.footer() == "1–7 of 7"
     ui.screenshot("duplicates")
 
