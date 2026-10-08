@@ -414,3 +414,23 @@ def test_common_dtype_refuses_lossy_or_different_types(a: pl.DataType, b: pl.Dat
 
 def test_repr(left: pl.DataFrame, right: pl.DataFrame) -> None:
     assert "mismatch=2" in repr(compare(left, right, "id"))
+
+
+def test_large_duplicate_groups_still_pair_identical_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dference._compare as engine
+
+    # a group too large to compare every pair: identical rows still pair up,
+    # the rest is paired by position
+    monkeypatch.setattr(engine, "_MAX_GROUP_CANDIDATES", 4)
+    left = pl.DataFrame({"id": [1] * 6, "v": [0, 1, 2, 3, 4, 5]})
+    right = pl.DataFrame({"id": [1] * 6, "v": [5, 4, 3, 2, 10, 11]})
+    result = compare(left, right, "id")
+    assert result.summary.equal == 4
+    assert result.summary.mismatch == 2
+    assert result.summary.missing_left == result.summary.missing_right == 0
+
+
+def test_one_key_repeated_many_times() -> None:
+    left = pl.DataFrame({"id": [7] * 3000, "v": list(range(3000))})
+    right = left.reverse()
+    assert compare(left, right, "id").summary.equal == 3000

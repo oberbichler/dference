@@ -48,8 +48,11 @@ COUNT_RIGHT = f"{_PREFIX}nr"
 
 #: How rows that share a key are paired (see :func:`compare`).
 Duplicates = Literal["match", "number", "raise"]
-#: Above this many candidate pairs, rows sharing a key are paired by order.
-_MAX_CANDIDATES = 2_000_000
+#: Rows sharing a key that are not identical are paired by similarity, comparing
+#: every left row with every right row of the key - up to this many pairs per
+#: key and in total; beyond that they are paired by position.
+_MAX_GROUP_CANDIDATES = 10_000
+_MAX_CANDIDATES = 1_000_000
 
 
 def duplicate_key() -> pl.Expr:
@@ -688,8 +691,20 @@ def compare(
         maintain_order="left_right",
     )
     if key_counts is not None:
-        joined = joined.drop(_OCC).join(
-            key_counts.lazy(), on=list(keys), how="left", nulls_equal=True, maintain_order="left"
+        # counts of the keys that are not unique (a small table); 1 or 0 otherwise
+        joined = (
+            joined.drop(_OCC)
+            .join(
+                key_counts.lazy(),
+                on=list(keys),
+                how="left",
+                nulls_equal=True,
+                maintain_order="left",
+            )
+            .with_columns(
+                pl.col(COUNT_LEFT).fill_null(pl.col(_IN_LEFT).fill_null(False).cast(pl.UInt32)),
+                pl.col(COUNT_RIGHT).fill_null(pl.col(_IN_RIGHT).fill_null(False).cast(pl.UInt32)),
+            )
         )
 
     in_l = pl.col(_IN_LEFT).fill_null(False)
@@ -776,14 +791,45 @@ def _differs(name: str, ldtype: DataType, rdtype: DataType, cast: DataType | Non
 
 
 def _key_counts(lf: pl.DataFrame, rf: pl.DataFrame, keys: tuple[str, ...]) -> pl.DataFrame | None:
-    """Rows per key on each side, or ``None`` if every key is unique on both."""
-    if not (lf.select(keys).is_duplicated().any() or rf.select(keys).is_duplicated().any()):
+    """Rows per side of every key that is not unique on a side; ``None`` if none is.
+
+    Only the rows of such keys are grouped, so unique keys cost one hash pass.
+    """
+    on = list(keys)
+    ldup = lf.select(keys).filter(lf.select(keys).is_duplicated())
+    rdup = rf.select(keys).filter(rf.select(keys).is_duplicated())
+    if ldup.is_empty() and rdup.is_empty():
         return None
-    gl = lf.group_by(keys).len(COUNT_LEFT)
-    gr = rf.group_by(keys).len(COUNT_RIGHT)
-    return gl.join(gr, on=list(keys), how="full", coalesce=True, nulls_equal=True).with_columns(
+    dup_keys = pl.concat([ldup, rdup]).unique()
+    gl = (
+        lf.select(keys)
+        .join(dup_keys, on=on, how="semi", nulls_equal=True)
+        .group_by(on)
+        .len(COUNT_LEFT)
+    )
+    gr = (
+        rf.select(keys)
+        .join(dup_keys, on=on, how="semi", nulls_equal=True)
+        .group_by(on)
+        .len(COUNT_RIGHT)
+    )
+    return gl.join(gr, on=on, how="full", coalesce=True, nulls_equal=True).with_columns(
         pl.col(COUNT_LEFT, COUNT_RIGHT).fill_null(0).cast(pl.UInt32)
     )
+
+
+def _normalised(
+    name: str, side: Literal["l", "r"], dtype: DataType, cast: DataType | None
+) -> pl.Expr:
+    """The value of ``name`` as :func:`_differs` compares it (for hashing)."""
+    value = pl.col(lcol(name) if side == "l" else rcol(name))
+    if cast == pl.String:
+        return as_text(value, dtype)
+    if cast is not None:
+        value = value.cast(cast, strict=False)
+    if (cast or dtype).is_float():
+        value = value.fill_nan(None)
+    return value
 
 
 def _occurrences(  # noqa: PLR0917 - internal helper of compare()
@@ -800,71 +846,156 @@ def _occurrences(  # noqa: PLR0917 - internal helper of compare()
 ) -> tuple[pl.Series, pl.Series]:
     """Occurrence number per row on each side; the join pairs equal numbers.
 
-    The left rows of a key are numbered 0, 1, …; each right row gets the
-    number of the left row it is paired with, unpaired right rows numbers
-    after the last left one (so they stay only in the right side).
+    Rows of unique keys keep 0. The left rows of a key that is not unique are
+    numbered 0, 1, …; each right row gets the number of the left row it is
+    paired with, unpaired right rows numbers after the last left one (so they
+    stay only in the right side). Only the rows of such keys are touched.
     """
     on = list(keys)
-    number = pl.int_range(pl.len(), dtype=pl.UInt32)
-    if mode == "number":
-        # lf/rf hold the rows in the same order as lsel/rsel
-        numbered = number.over(on, order_by=order) if order else number.over(on)
-        return lf.select(numbered).to_series(), rf.select(numbered).to_series()
-
     li, ri = f"{_PREFIX}li", f"{_PREFIX}ri"
-    lnum = lsel.select(number.over(on)).to_series()
-    dup = (pl.col(COUNT_LEFT) > 1) | (pl.col(COUNT_RIGHT) > 1)
-    dup_keys = counts.filter(dup).select(keys)
-    size = int(counts.filter(dup).select((pl.col(COUNT_LEFT) * pl.col(COUNT_RIGHT)).sum()).item())
-    ldup = lsel.with_columns(lnum.alias(_OCC)).with_row_index(li)
-    ldup = ldup.join(dup_keys, on=on, how="semi", nulls_equal=True)
-    rdup = rsel.with_row_index(ri).join(dup_keys, on=on, how="semi", nulls_equal=True)
+    dup_keys = counts.select(on)
 
-    paired: dict[int, int] = {}
-    if size <= _MAX_CANDIDATES:
+    if mode == "number":
+        # lf/rf hold the rows in the same order as lsel/rsel (and the order_by columns)
+        lpart = lf.with_row_index(li).join(dup_keys, on=on, how="semi", nulls_equal=True)
+        rpart = rf.with_row_index(ri).join(dup_keys, on=on, how="semi", nulls_equal=True)
+        lpart = lpart.select(li, _number_within(lpart, on, order).alias(_OCC))
+        rpart = rpart.select(ri, _number_within(rpart, on, order).alias(_OCC))
+        return _scatter(lsel.height, lpart, li), _scatter(rsel.height, rpart, ri)
+
+    h, rank = f"{_PREFIX}h", f"{_PREFIX}rank"
+    lval = [_normalised(c, "l", lf.schema[c], casts[c]) for c in compared]
+    rval = [_normalised(c, "r", rf.schema[c], casts[c]) for c in compared]
+    ldup = (
+        lsel.select(*keys, *(lcol(c) for c in compared))
+        .with_row_index(li)
+        .join(dup_keys, on=on, how="semi", nulls_equal=True)
+        .with_columns((pl.struct(lval).hash() if lval else pl.lit(0, pl.UInt64)).alias(h))
+    )
+    ldup = ldup.with_columns(_number_within(ldup, on).alias(_OCC))
+    rdup = (
+        rsel.select(*keys, *(rcol(c) for c in compared))
+        .with_row_index(ri)
+        .join(dup_keys, on=on, how="semi", nulls_equal=True)
+        .with_columns((pl.struct(rval).hash() if rval else pl.lit(0, pl.UInt64)).alias(h))
+    )
+
+    # 1. identical rows: the n-th copy of a row on the left pairs with the n-th on the right
+    exact = ldup.select(*on, h, li, _OCC, _number_within(ldup, [*on, h]).alias(rank)).join(
+        rdup.select(*on, h, ri, _number_within(rdup, [*on, h]).alias(rank)),
+        on=[*on, h, rank],
+        nulls_equal=True,
+    )
+    pairs = [exact.select(ri, _OCC)]
+    lrest = ldup.join(exact.select(li), on=li, how="anti")
+    rrest = rdup.join(exact.select(ri), on=ri, how="anti")
+
+    # 2. the rest: the most similar rows (fewest differing columns) within small
+    #    groups; groups too large to compare every pair are paired by position
+    sizes = (
+        lrest.group_by(on).len("nl")
+        .join(rrest.group_by(on).len("nr"), on=on, nulls_equal=True)
+        .with_columns((pl.col("nl") * pl.col("nr")).alias("n"))
+        .sort("n")
+        .with_columns((pl.col("n").cum_sum() <= _MAX_CANDIDATES).alias("small"))
+        .with_columns(pl.col("small") & (pl.col("n") <= _MAX_GROUP_CANDIDATES))
+    )  # fmt: skip
+    small, large = sizes.filter("small").select(on), sizes.filter(~pl.col("small")).select(on)
+    if not small.is_empty():
         differs = [
             _differs(c, lf.schema[c], rf.schema[c], casts[c]).cast(pl.UInt32) for c in compared
         ]
         cand = (
-            ldup.select(*keys, li, _OCC, *(lcol(c) for c in compared))
-            .join(rdup.select(*keys, ri, *(rcol(c) for c in compared)), on=on, nulls_equal=True)
+            lrest.join(small, on=on, how="semi", nulls_equal=True)
+            .join(
+                rrest.join(small, on=on, how="semi", nulls_equal=True),
+                on=on,
+                nulls_equal=True,
+            )
             .select(li, ri, _OCC, (pl.sum_horizontal(differs) if differs else pl.lit(0)).alias("n"))
             .sort("n", li, ri)
         )
-        used_l: set[int] = set()
-        for lrow, rrow, occ, _n in cand.iter_rows():
-            if lrow not in used_l and rrow not in paired:
-                used_l.add(lrow)
-                paired[rrow] = occ
-    else:  # too many candidates: pair by position instead
-        return lnum, rsel.select(number.over(on)).to_series()
-
-    rocc = (
-        rsel.select(keys)
-        .with_row_index(ri)
-        .join(
-            pl.DataFrame(
-                {ri: list(paired), _OCC: list(paired.values())},
-                schema={ri: pl.UInt32, _OCC: pl.UInt32},
-            ),
-            on=ri,
-            how="left",
-            maintain_order="left",
-        )
-        .join(counts, on=on, how="left", nulls_equal=True, maintain_order="left")
-        .select(
-            pl.when((pl.col(COUNT_LEFT) <= 1) & (pl.col(COUNT_RIGHT) <= 1))
-            .then(0)  # a unique key: joined as usual
-            .when(pl.col(_OCC).is_not_null())
-            .then(pl.col(_OCC))
-            .otherwise(
-                pl.col(COUNT_LEFT) + pl.col(_OCC).is_null().cast(pl.UInt32).cum_sum().over(on) - 1
+        pairs.append(_greedy(cand, li, ri))
+    if not large.is_empty():
+        lbig = lrest.join(large, on=on, how="semi", nulls_equal=True)
+        rbig = rrest.join(large, on=on, how="semi", nulls_equal=True)
+        pairs.append(
+            lbig.select(*on, _OCC, _number_within(lbig, on).alias(rank))
+            .join(
+                rbig.select(*on, ri, _number_within(rbig, on).alias(rank)),
+                on=[*on, rank],
+                nulls_equal=True,
             )
-            .cast(pl.UInt32)
+            .select(ri, _OCC)
         )
-        .to_series()
+
+    # 3. unpaired right rows: numbers after the last left row of their key
+    paired = pl.concat([p.cast({ri: pl.UInt32, _OCC: pl.UInt32}) for p in pairs])
+    unpaired = (
+        rdup.select(*on, ri)
+        .join(paired, on=ri, how="anti")
+        .join(counts.select(*on, COUNT_LEFT), on=on, nulls_equal=True)
     )
-    return lnum, rocc
+    unpaired = unpaired.select(
+        ri, (pl.col(COUNT_LEFT) + _number_within(unpaired, on)).cast(pl.UInt32).alias(_OCC)
+    )
+    rpart = pl.concat([paired, unpaired])
+    return _scatter(lsel.height, ldup.select(li, _OCC), li), _scatter(rsel.height, rpart, ri)
+
+
+def _number_within(df: pl.DataFrame, by: list[str], order: Sequence[str] = ()) -> pl.Series:
+    """0, 1, … for the rows of each group of ``by``, aligned with the rows of ``df``.
+
+    Rows are numbered in row order, or sorted by ``order``. Sort-based, because
+    ``int_range(...).over(by)`` is several times slower on many small groups.
+    """
+    idx, pos = f"{_PREFIX}i", pl.int_range(pl.len(), dtype=pl.UInt32)
+    group = (pl.struct(by) if len(by) > 1 else pl.col(by[0])).rle_id()
+    numbered = (
+        df.select(*by, *order)
+        .with_row_index(idx)
+        .sort([*by, *order], maintain_order=True, nulls_last=True)
+        .select(idx, pos - pl.when(group.diff().fill_null(1) != 0).then(pos).forward_fill())
+    )
+    occ = pl.zeros(df.height, pl.UInt32, eager=True)
+    return occ.scatter(numbered.get_column(idx), numbered.to_series(1).cast(pl.UInt32))
+
+
+def _greedy(cand: pl.DataFrame, li: str, ri: str) -> pl.DataFrame:
+    """Pair rows from candidate pairs sorted by distance, each row at most once.
+
+    Same result as walking the sorted list and taking every pair whose rows
+    are both still free, but vectorised: in each round, every pair that is the
+    best one of both its rows is taken, and the pairs of the taken rows drop
+    out. With a strict order on the pairs, the best remaining pair always
+    qualifies, so each round takes at least one; a few rounds are typical.
+    """
+    k = f"{_PREFIX}k"
+    cand = cand.select(li, ri, _OCC).with_row_index(k)  # already sorted best first
+    taken: list[pl.DataFrame] = []
+    while not cand.is_empty():
+        best = cand.select(
+            pl.col(k).min().over(li).alias("bl"), pl.col(k).min().over(ri).alias("br"), k
+        )
+        mutual = cand.filter(
+            (best.get_column(k) == best.get_column("bl"))
+            & (best.get_column(k) == best.get_column("br"))
+        )
+        taken.append(mutual.select(ri, _OCC))
+        cand = cand.join(mutual.select(li), on=li, how="anti").join(
+            mutual.select(ri), on=ri, how="anti"
+        )
+    if not taken:
+        return pl.DataFrame(schema={ri: pl.UInt32, _OCC: pl.UInt32})
+    return pl.concat(taken).cast({ri: pl.UInt32, _OCC: pl.UInt32})
+
+
+def _scatter(height: int, part: pl.DataFrame, index: str) -> pl.Series:
+    """Occurrence numbers for all rows: 0, except the rows listed in ``part``."""
+    occ = pl.zeros(height, pl.UInt32, eager=True)
+    if part.is_empty():
+        return occ
+    return occ.scatter(part.get_column(index), part.get_column(_OCC))
 
 
 def _validate_keys(
